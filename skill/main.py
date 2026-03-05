@@ -192,17 +192,6 @@ def cmd_update_plan(json_str: str) -> None:
         _err(str(e))
 
 
-def cmd_collect() -> None:
-    """Collect signals from all approved plans."""
-    from core.orchestrator import Orchestrator  # noqa: PLC0415
-
-    config = _load_config()
-    storage = _make_storage()
-    orch = Orchestrator(config, storage)
-    result = orch.collect()
-    _out({"status": "done", "phase": "collect", **result})
-
-
 def cmd_embed() -> None:
     """Embed pending signals into Qdrant."""
     from core.orchestrator import Orchestrator  # noqa: PLC0415
@@ -396,7 +385,6 @@ def cmd_set_routing(json_str: str) -> None:
 
 
 _SH_EMBED_CRON_JOB_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-_SH_COLLECT_CRON_JOB_ID = "c9d4e5f6-a7b8-4c2d-9e0f-1a2b3c4d5e6f"
 _SH_WORKER_CRON_JOB_ID = "e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b"
 
 
@@ -638,28 +626,6 @@ def cmd_set_embed_schedule(json_str: str) -> None:
             f"jobId='{_SH_EMBED_CRON_JOB_ID}', message='Run sh_embed to vectorize pending signals.' "
             f"and patch.schedule (e.g. {{\"kind\": \"cron\", \"expr\": \"*/10 * * * *\"}}). "
             f"Recommended: */10 * * * * (every 10 min) with max_items_per_run=128."
-        ),
-    })
-
-
-def cmd_set_collect_schedule(json_str: str) -> None:
-    """
-    Return cron_job_id and instructions to set the collect cron schedule via cron.update.
-    json_str: '{}' - no config params needed, collect has no batch settings.
-
-    The cron interval is managed via OpenClaw's cron.update using the returned cron_job_id.
-    Recommended: twice a day - '0 8,20 * * *' (Europe/Kiev).
-    """
-    _out({
-        "status": "ok",
-        "cron_job_id": _SH_COLLECT_CRON_JOB_ID,
-        "note": (
-            f"To create or update the collect cron job, call cron.update with "
-            f"jobId='{_SH_COLLECT_CRON_JOB_ID}', "
-            f"name='Signal Hunter - Auto Collect', "
-            f"message='Run sh_collect to fetch new signals. Report only: how many new signals collected.' "
-            f"and patch.schedule (e.g. {{\"kind\": \"cron\", \"expr\": \"0 8,20 * * *\", \"tz\": \"Europe/Kiev\"}}). "
-            f"Recommended: twice a day - 0 8,20 * * * (08:00 and 20:00 Kiev time)."
         ),
     })
 
@@ -939,7 +905,6 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "refresh_profile":          (cmd_refresh_profile, True),
     "approve_plan":             (cmd_approve_plan, True),
     "update_plan":              (cmd_update_plan, True),
-    "collect":                  (cmd_collect, False),
     "embed":                    (cmd_embed, False),
     "reprocess":                (cmd_reprocess, True),
     "query":                    (cmd_query, True),
@@ -955,7 +920,6 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "delete_keywords":          (cmd_delete_keywords, True),
     "retry_failed":             (cmd_retry_failed, False),
     "set_embed_schedule":       (cmd_set_embed_schedule, True),
-    "set_collect_schedule":     (cmd_set_collect_schedule, True),
     "suggest_rules":            (cmd_suggest_rules, True),
     "approve_rules":            (cmd_approve_rules, False),
     "generate_change_report":   (cmd_generate_change_report, True),

@@ -3,13 +3,18 @@ LLM Task Queue Worker.
 Processes tasks from llm_task_queue sequentially, one at a time.
 Called by cron via skill command 'run_worker'.
 
-Task types:
-  - resolve:        resolve and auto-approve a keyword (priority 50)
-  - process_batch:  run one LLM classification batch (priority 90)
+Task types and priorities (lower = higher priority):
+  - resolve:          50  - enrich keyword with LLM, create collection plan
+  - collect_keyword:  70  - collect signals for one keyword (max once per 24h)
+  - process_batch:    90  - LLM classify a batch of unprocessed signals
+
+Worker auto-enqueue logic (runs every tick before claiming next task):
+  1. For each keyword with approved plan and last_collected_at > 24h (or NULL):
+     enqueue collect_keyword if not already pending/running (up to 3 per tick)
+  2. If unprocessed signals exist and no process_batch pending: enqueue process_batch
 
 Worker guarantees:
   - Only one task runs at a time (has_running_llm_task check)
-  - Auto-enqueues process_batch when unprocessed signals exist
   - Retries failed tasks up to 3 times before marking as 'failed'
   - Resets tasks stuck in 'running' for > 10 minutes
   - Loops within one cron tick until time budget is exhausted
@@ -60,6 +65,17 @@ class LLMWorker:
                 log.warning("[llm_worker] unexpected running task, stopping loop")
                 break
 
+            # Auto-enqueue collect_keyword for stale keywords (not collected in 24h)
+            stale = self._storage.get_stale_keywords(min_age_hours=24, limit=3)
+            for kw in stale:
+                if not self._storage.has_pending_collect_for(kw):
+                    self._storage.enqueue_llm_task(
+                        task_type="collect_keyword",
+                        priority=70,
+                        payload={"keyword": kw},
+                    )
+                    log.info("[llm_worker] enqueued collect_keyword for stale keyword '%s'", kw)
+
             # Auto-enqueue process_batch when signals need classification
             if (
                 not self._storage.has_pending_process_batch()
@@ -84,6 +100,8 @@ class LLMWorker:
             try:
                 if task_type == "resolve":
                     result = self._handle_resolve(payload)
+                elif task_type == "collect_keyword":
+                    result = self._handle_collect_keyword(payload)
                 elif task_type == "process_batch":
                     result = self._handle_process_batch()
                 else:
@@ -149,6 +167,23 @@ class LLMWorker:
             "auto_approved": bool(plans),
             "sources": list(plans.keys()) if plans else [],
         }
+
+    def _handle_collect_keyword(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """
+        Collect signals for a single keyword using its approved collection plans.
+        Updates last_collected_at on success.
+        """
+        from core.orchestrator import Orchestrator  # noqa: PLC0415
+
+        keyword = payload.get("keyword", "")
+        if not keyword:
+            raise ValueError("collect_keyword task missing 'keyword' in payload")
+
+        orch = Orchestrator(self._config, self._storage)
+        result = orch.collect(keywords=[keyword])
+        self._storage.update_keyword_collected_at(keyword)
+        log.info("[llm_worker] collected signals for '%s'", keyword)
+        return {"keyword": keyword, **result}
 
     def _handle_process_batch(self) -> dict[str, Any]:
         """

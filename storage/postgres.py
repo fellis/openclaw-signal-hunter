@@ -629,6 +629,55 @@ class PostgresStorage:
                 )
                 return cur.rowcount
 
+    def get_stale_keywords(self, min_age_hours: int = 24, limit: int = 3) -> list[str]:
+        """
+        Return canonical_names of keywords that have approved collection plans
+        and have not been collected in the last min_age_hours hours.
+        NULLs (never collected) come first, then oldest collected_at.
+        Only returns keywords with at least one approved plan.
+        """
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT kp.canonical_name
+                    FROM keyword_profiles kp
+                    JOIN keyword_collection_plans kcp
+                        ON kcp.canonical_name = kp.canonical_name
+                    WHERE kp.last_collected_at IS NULL
+                       OR kp.last_collected_at < now() - (%s || ' hours')::interval
+                    ORDER BY kp.last_collected_at ASC NULLS FIRST
+                    LIMIT %s
+                    """,
+                    (str(min_age_hours), limit),
+                )
+                return [row["canonical_name"] for row in cur.fetchall()]
+
+    def update_keyword_collected_at(self, canonical_name: str) -> None:
+        """Mark a keyword as just collected (sets last_collected_at = now())."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "UPDATE keyword_profiles SET last_collected_at = now() WHERE canonical_name = %s",
+                    (canonical_name,),
+                )
+
+    def has_pending_collect_for(self, canonical_name: str) -> bool:
+        """Check if there is already a pending or running collect_keyword task for this keyword."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM llm_task_queue
+                    WHERE task_type = 'collect_keyword'
+                      AND status IN ('pending', 'running')
+                      AND payload->>'keyword' = %s
+                    LIMIT 1
+                    """,
+                    (canonical_name,),
+                )
+                return cur.fetchone() is not None
+
     def retry_failed_llm_tasks(self) -> int:
         """Reset all 'failed' tasks back to 'pending' with retry_count=0."""
         with self._conn() as conn:

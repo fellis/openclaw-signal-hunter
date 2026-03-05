@@ -62,14 +62,19 @@ CREATE TABLE IF NOT EXISTS collection_cursors (
 );
 
 CREATE TABLE IF NOT EXISTS keyword_profiles (
-    canonical_name  TEXT PRIMARY KEY,
-    raw             TEXT NOT NULL,
-    keyword_type    TEXT NOT NULL,
-    description     TEXT,
-    profile_data    JSONB NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    canonical_name      TEXT PRIMARY KEY,
+    raw                 TEXT NOT NULL,
+    keyword_type        TEXT NOT NULL,
+    description         TEXT,
+    profile_data        JSONB NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_collected_at   TIMESTAMPTZ
 );
+-- Migration: add last_collected_at if it doesn't exist yet
+DO $$ BEGIN
+    ALTER TABLE keyword_profiles ADD COLUMN IF NOT EXISTS last_collected_at TIMESTAMPTZ;
+END $$;
 
 CREATE TABLE IF NOT EXISTS keyword_collection_plans (
     canonical_name  TEXT NOT NULL,

@@ -158,37 +158,6 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // Collect
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_collect',
-      description:
-        'Collect new signals from all approved collection plans. ' +
-        'Runs incrementally (uses cursor). Takes 1-3 minutes. ' +
-        'IMPORTANT: after collect, DO NOT run process or embed or full_cycle. ' +
-        'Processing and embedding happen automatically via cron (every 2 min and 10 min). ' +
-        'Just collect and tell the user that classification will happen automatically. ' +
-        'Triggers: "collect signals", "fetch new data", "update signals", ' +
-        '"добавь новые сигналы", "собери данные", "обнови данные".',
-      parameters: {
-        type: 'object',
-        properties: {
-          background: {
-            type: 'boolean',
-            description: 'Run in background without waiting (default true)',
-            default: true,
-          },
-        },
-      },
-      async execute() {
-        const result = await runSkillCommand(cfg, 'collect');
-        if (!result.success) return text(`Collect failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        return text(`Collection done. New signals: **${d?.total ?? 0}**`);
-      },
-    },
-
-    // ----------------------------------------------------------------
     // Embed
     // ----------------------------------------------------------------
     {
@@ -766,36 +735,6 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         return text(
           `**Embed schedule configured:**\n` +
           `max_items_per_run: **${d?.max_items_per_run}**\n\n` +
-          `${d?.note ?? ''}`
-        );
-      },
-    },
-
-    // ----------------------------------------------------------------
-    // Set collect schedule
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_set_collect_schedule',
-      description:
-        'Configure the automatic collect cron schedule. ' +
-        'Returns cron_job_id to create/update the collect cron job via cron.update. ' +
-        'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and desired schedule. ' +
-        'Recommended: twice a day - expr "0 8,20 * * *" tz "Europe/Kiev". ' +
-        'Triggers: "собирай сигналы 2 раза в день", "collect twice a day", ' +
-        '"настрой расписание сбора", "set collect schedule", ' +
-        '"добавь автосбор", "автоматический сбор сигналов".',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-      async execute(_id, _params) {
-        const result = await runSkillCommand(cfg, 'set_collect_schedule', '{}');
-        if (!result.success) return text(`Set collect schedule failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        return text(
-          `**Collect schedule:** ready to configure.\n\n` +
-          `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
           `${d?.note ?? ''}`
         );
       },
