@@ -1,6 +1,6 @@
 # Signal Hunter - OpenClaw Plugin
 
-Market intelligence for AI/ML builders. Monitors GitHub, Reddit, Hacker News and Stack Overflow for signals: developer pain points, feature requests, tool comparisons. Manages everything through a chat interface via [OpenClaw](https://github.com/openclaw).
+Market intelligence for AI/ML builders. Monitors GitHub, Hugging Face, Hacker News, Stack Overflow and Reddit for signals: developer pain points, feature requests, tool comparisons. Manages everything through a chat interface via [OpenClaw](https://github.com/openclaw).
 
 ---
 
@@ -8,15 +8,15 @@ Market intelligence for AI/ML builders. Monitors GitHub, Reddit, Hacker News and
 
 You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 
-1. **Discovers** where the topic is discussed (repos, subreddits, SO tags) via real API calls
-2. **Proposes a collection plan** - which repos/queries to monitor
-3. **Collects incrementally** (GitHub issues, Reddit posts, HN threads, SO questions) using cursors
+1. **Discovers** where the topic is discussed (repos, subreddits, HF models, SO tags) via real API calls - no LLM guessing
+2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested relevant subreddits
+3. **Collects incrementally** (GitHub issues, HF discussions, HN threads, SO questions, Reddit posts) using cursors
 4. **Classifies** every signal with a local LLM using your extraction rules (pain points, feature requests, comparisons, adoption...)
 5. **Embeds** relevant signals into Qdrant with `bge-m3`
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
 7. **Generates change reports** - weekly/monthly deltas with what's new and what grew
 
-Everything runs on a VPS, fully offline (except for API calls to GitHub/Reddit/SO and the LLM providers you configure).
+Everything runs on a VPS, fully offline (except for API calls to data sources and the LLM providers you configure).
 
 ---
 
@@ -56,9 +56,10 @@ skill/main.py         ← CLI dispatcher (22 commands)
      │
      ├── collectors/
      │   ├── github.py         ← GitHub Issues (repo-scoped, cursor on updated_at)
-     │   ├── reddit.py         ← Reddit JSON API (no auth for public subs)
+     │   ├── huggingface.py    ← HF model/space discussions + papers
      │   ├── hackernews.py     ← Algolia HN API (no auth)
-     │   └── stackoverflow.py  ← Stack Exchange API v2.3
+     │   ├── stackoverflow.py  ← Stack Exchange API v2.3
+     │   └── reddit.py         ← Reddit JSON API / OAuth (60 req/min with token)
      │
      └── storage/
          ├── postgres.py       ← all SQL (raw_signals, processed_signals, cursors...)
@@ -173,10 +174,12 @@ You: source status
 
 ```
 ClawBot:
-✓ hackernews  - no auth required
-✗ github      - no GITHUB_TOKEN
-✗ reddit      - public API ready, ~10 req/min
-✗ stackoverflow - 300 req/day without key
+✓ github        - 5000 req/hr (authenticated)
+✓ hackernews    - no auth required
+✓ stackoverflow - 300 req/day without key (10000 with key)
+✓ huggingface   - public API (set HF_TOKEN for higher limits)
+✗ reddit        - disabled (needs OAuth credentials)
+✗ producthunt   - disabled (needs OAuth app)
 ```
 
 ```
@@ -188,15 +191,20 @@ ClawBot:
 1. Go to github.com → Settings → Developer settings → Personal access tokens → Tokens (classic)
 2. Click "Generate new token (classic)"
 3. Name: signal-hunter, Scopes: public_repo
-4. Copy the token and type: github token=<your_token>
+4. Copy the token and type: set credentials github {"api_token": "ghp_xxx"}
 ```
 
 ```
-You: github token=ghp_xxxxxxxxxxxxxxxxxxx
+You: how do I set up Hugging Face?
 ```
 
 ```
-ClawBot: ✓ GitHub ready. Limit: 5000 req/hr
+ClawBot:
+Works without a token for public content.
+For higher rate limits:
+1. Go to https://huggingface.co/settings/tokens
+2. Click "New token", Role: read
+3. set credentials huggingface {"api_token": "hf_xxx"}
 ```
 
 ---
@@ -238,18 +246,14 @@ Signal Hunter calls each source API (no LLM guessing) and returns discovered res
 ```
 ClawBot:
 DISCOVERY: RAG
-  GitHub: langchain-ai/langchain (88k stars), run-llama/llama_index (35k)
-  Reddit: r/LocalLLaMA (245k subs), r/LangChain (42k)
-  HN: 89 threads in last 90 days, avg score 124
+  GitHub: langchain-ai/langchain (88k stars), run-llama/llama_index (35k), ...18 more
+  HuggingFace: BAAI/bge-m3 (model), deepset/roberta-base-squad2, ...8 more
+  Reddit: r/LocalLLaMA, r/LangChain, r/MachineLearning (LLM-suggested)
+  HN: 89 threads in last 90 days
   SO: 1820 questions with tag [rag]
 
-DISCOVERY: ollama
-  GitHub: ollama/ollama (85k stars, 2340 open issues)
-  Reddit: r/ollama (52k subs), r/LocalLLaMA
-
 Proposed collection plan:
-  RAG: github(langchain-ai/langchain, run-llama/llama_index), reddit(r/LocalLLaMA, r/LangChain), hn(search "RAG"), so(tag:rag)
-  ollama: github(ollama/ollama), reddit(r/ollama, r/LocalLLaMA), hn, so
+  RAG: github(20 repos), huggingface(10 models), reddit(8 subs), hn, so
 
 Approve all? Or adjust targets?
 ```
@@ -271,20 +275,21 @@ You: collect
 ```
 
 ```
-ClawBot: Running in background... (first run: 10-20 min for 90 days of history)
+ClawBot: Running in background... (first run: 15-30 min for 90 days of history)
 ```
 
 ```
 ClawBot:
 ✓ Collection done:
 
-Keyword    | GitHub | Reddit | HN  | SO  | Total
------------|--------|--------|-----|-----|------
-RAG        | 400    | 312    | 89  | 200 | 1001
-ollama     | 200    | 287    | 43  | 98  | 628
-LangChain  | 200    | 198    | 67  | 200 | 665
+Keyword    | GitHub | HuggingFace | HN  | SO  | Reddit | Total
+-----------|--------|-------------|-----|-----|--------|------
+RAG        | 400    | 87          | 89  | 200 | 0*     | 776
+ollama     | 200    | 43          | 43  | 98  | 0*     | 384
+LangChain  | 200    | 61          | 67  | 200 | 0*     | 528
 
-2294 raw signals in database.
+*Reddit disabled until OAuth credentials configured.
+1688 raw signals in database.
 ```
 
 ---
@@ -481,10 +486,12 @@ All commands are also available as OpenClaw tools (prefix `signal_hunter_`) and 
 ```json
 {
   "sources": {
-    "github":        { "enabled": true },
-    "reddit":        { "enabled": false },
-    "hackernews":    { "enabled": false },
-    "stackoverflow": { "enabled": false }
+    "github":        { "enabled": true,  "credentials": {"api_token": "${GITHUB_TOKEN}"} },
+    "hackernews":    { "enabled": true,  "credentials": {} },
+    "stackoverflow": { "enabled": true,  "credentials": {} },
+    "huggingface":   { "enabled": true,  "credentials": {} },
+    "reddit":        { "enabled": false, "credentials": {} },
+    "producthunt":   { "enabled": false, "credentials": {} }
   },
   "extraction_rules": [],
   "processor": {
