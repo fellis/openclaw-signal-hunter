@@ -22,9 +22,9 @@ Run skill functions via: `python -m skill <command> [arguments]`
 
 ## Collection and processing (cron)
 - `collect` → collect from all approved plans (incremental, uses cursors)
-- `process` → LLM classification of unprocessed signals
-- `embed` → index pending signals into Qdrant
-- `full_cycle` → collect + process + embed in sequence
+- `process` → LLM classification of unprocessed signals (runs automatically via cron every 2 min)
+- `embed` → index pending signals into Qdrant (runs automatically via cron every 10 min)
+- `full_cycle` → collect + process + embed in sequence (use only when explicitly requested)
 - `reprocess <json>` → reclassify signals `{"keyword": "...", "rules": ["rule1"]}` (rules optional)
 
 ## Classification rules
@@ -51,3 +51,6 @@ Run skill functions via: `python -m skill <command> [arguments]`
 - Notify user with result after long operation completes
 - Use atomic write for config.json (built into skill)
 - Never show full credentials to user - only ready/not_ready status
+- CRITICAL: after `collect`, do NOT run `process`, `embed`, or `full_cycle` - cron handles them automatically (process every 2 min, embed every 10 min). Just report how many signals were collected.
+- Use `full_cycle` ONLY when user explicitly asks for it (e.g. "full cycle", "sync everything"). Never infer full_cycle from "add signals" or "collect" requests.
+- If user says "add signals" / "collect signals" / "fetch data" / "добавь сигналы" - run `collect` only.

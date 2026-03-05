@@ -437,6 +437,7 @@ def cmd_set_routing(json_str: str) -> None:
 
 _SH_CRON_JOB_ID = "7a3f9b2c-4e1d-4c8a-b5f6-0d2e8a1c9b3f"
 _SH_EMBED_CRON_JOB_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+_SH_COLLECT_CRON_JOB_ID = "c9d4e5f6-a7b8-4c2d-9e0f-1a2b3c4d5e6f"
 
 
 def cmd_set_process_schedule(json_str: str) -> None:
@@ -518,6 +519,28 @@ def cmd_set_embed_schedule(json_str: str) -> None:
             f"jobId='{_SH_EMBED_CRON_JOB_ID}', message='Run sh_embed to vectorize pending signals.' "
             f"and patch.schedule (e.g. {{\"kind\": \"cron\", \"expr\": \"*/10 * * * *\"}}). "
             f"Recommended: */10 * * * * (every 10 min) with max_items_per_run=128."
+        ),
+    })
+
+
+def cmd_set_collect_schedule(json_str: str) -> None:
+    """
+    Return cron_job_id and instructions to set the collect cron schedule via cron.update.
+    json_str: '{}' - no config params needed, collect has no batch settings.
+
+    The cron interval is managed via OpenClaw's cron.update using the returned cron_job_id.
+    Recommended: twice a day - '0 8,20 * * *' (Europe/Kiev).
+    """
+    _out({
+        "status": "ok",
+        "cron_job_id": _SH_COLLECT_CRON_JOB_ID,
+        "note": (
+            f"To create or update the collect cron job, call cron.update with "
+            f"jobId='{_SH_COLLECT_CRON_JOB_ID}', "
+            f"name='Signal Hunter - Auto Collect', "
+            f"message='Run sh_collect to fetch new signals. Report only: how many new signals collected.' "
+            f"and patch.schedule (e.g. {{\"kind\": \"cron\", \"expr\": \"0 8,20 * * *\", \"tz\": \"Europe/Kiev\"}}). "
+            f"Recommended: twice a day - 0 8,20 * * * (08:00 and 20:00 Kiev time)."
         ),
     })
 
@@ -810,6 +833,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_routing":              (cmd_set_routing, True),
     "set_process_schedule":     (cmd_set_process_schedule, True),
     "set_embed_schedule":       (cmd_set_embed_schedule, True),
+    "set_collect_schedule":     (cmd_set_collect_schedule, True),
     "suggest_rules":            (cmd_suggest_rules, True),
     "approve_rules":            (cmd_approve_rules, False),
     "generate_change_report":   (cmd_generate_change_report, True),

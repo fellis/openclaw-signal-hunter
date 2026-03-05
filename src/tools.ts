@@ -165,7 +165,11 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       description:
         'Collect new signals from all approved collection plans. ' +
         'Runs incrementally (uses cursor). Takes 1-3 minutes. ' +
-        'Triggers: "collect signals", "fetch new data", "update signals".',
+        'IMPORTANT: after collect, DO NOT run process or embed or full_cycle. ' +
+        'Processing and embedding happen automatically via cron (every 2 min and 10 min). ' +
+        'Just collect and tell the user that classification will happen automatically. ' +
+        'Triggers: "collect signals", "fetch new data", "update signals", ' +
+        '"добавь новые сигналы", "собери данные", "обнови данные".',
       parameters: {
         type: 'object',
         properties: {
@@ -190,9 +194,11 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_process',
       description:
-        'Run LLM classification on all unprocessed raw signals. ' +
-        'Uses local LLM with token-aware batching. Takes several minutes for large batches. ' +
-        'Triggers: "process signals", "classify signals", "run LLM on new data".',
+        'Run LLM classification on unprocessed raw signals. ' +
+        'NOTE: classification runs automatically via cron every 2 minutes. ' +
+        'Call this manually ONLY if user explicitly asks to classify right now, ' +
+        'or needs immediate results without waiting for cron. ' +
+        'Triggers: "process signals now", "classify immediately", "run LLM right now".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'process');
@@ -209,8 +215,10 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       name: 'signal_hunter_embed',
       description:
         'Vectorize pending relevant signals with bge-m3 and index into Qdrant. ' +
-        'Required after process to enable semantic search. ' +
-        'Triggers: "embed signals", "update vector index", "index signals".',
+        'NOTE: embedding runs automatically via cron every 10 minutes. ' +
+        'Call this manually ONLY if user explicitly asks to embed right now, ' +
+        'or needs search to work immediately without waiting for cron. ' +
+        'Triggers: "embed now", "update vector index now", "index signals immediately".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'embed');
@@ -226,9 +234,13 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_full_cycle',
       description:
-        'Run full pipeline: collect → process → embed. ' +
-        'Use for scheduled daily/weekly updates. Takes 5-15 minutes. ' +
-        'Triggers: "run full update", "daily update", "sync signal hunter".',
+        'Run full pipeline: collect → process → embed in one shot. ' +
+        'IMPORTANT: use this ONLY when user explicitly asks for a full pipeline run. ' +
+        'Do NOT use after a regular collect - cron handles process and embed automatically. ' +
+        'Do NOT use just because there are unprocessed signals - cron will get to them. ' +
+        'Use ONLY for: one-time full sync when cron is not set up, ' +
+        'or user explicitly says "full cycle" / "full update" / "sync everything now". ' +
+        'Triggers: "full cycle", "full update", "sync everything now", "запусти полный цикл".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'full_cycle');
@@ -633,6 +645,36 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         return text(
           `**Embed schedule configured:**\n` +
           `max_items_per_run: **${d?.max_items_per_run}**\n\n` +
+          `${d?.note ?? ''}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // Set collect schedule
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_set_collect_schedule',
+      description:
+        'Configure the automatic collect cron schedule. ' +
+        'Returns cron_job_id to create/update the collect cron job via cron.update. ' +
+        'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and desired schedule. ' +
+        'Recommended: twice a day - expr "0 8,20 * * *" tz "Europe/Kiev". ' +
+        'Triggers: "собирай сигналы 2 раза в день", "collect twice a day", ' +
+        '"настрой расписание сбора", "set collect schedule", ' +
+        '"добавь автосбор", "автоматический сбор сигналов".',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      async execute(_id, _params) {
+        const result = await runSkillCommand(cfg, 'set_collect_schedule', '{}');
+        if (!result.success) return text(`Set collect schedule failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        return text(
+          `**Collect schedule:** ready to configure.\n\n` +
+          `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
           `${d?.note ?? ''}`
         );
       },

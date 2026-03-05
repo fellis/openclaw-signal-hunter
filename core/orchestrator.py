@@ -38,10 +38,11 @@ class Orchestrator:
         self._config = config
         self._storage = storage
 
-    def collect(self) -> dict[str, Any]:
+    def collect(self, keywords: list[str] | None = None) -> dict[str, Any]:
         """
-        Run collection for all keywords with approved plans.
-        Returns summary: {total: int, by_collector: {name: int}}.
+        Run collection for approved plans.
+        keywords: if provided, only collect plans whose canonical_name is in this list.
+        Returns summary: {total: int, by_collector: {name: int}, keywords_filtered: list}.
         """
         load_all_collectors()
         plans = self._storage.get_all_active_plans()
@@ -49,6 +50,14 @@ class Orchestrator:
         if not plans:
             _emit({"status": "done", "phase": "collect", "total": 0, "note": "No approved plans found."})
             return {"total": 0, "by_collector": {}}
+
+        if keywords:
+            kw_set = {k.lower() for k in keywords}
+            plans = [p for p in plans if p["canonical_name"].lower() in kw_set]
+            if not plans:
+                note = f"No approved plans for: {keywords}"
+                _emit({"status": "done", "phase": "collect", "total": 0, "note": note})
+                return {"total": 0, "by_collector": {}}
 
         by_collector: dict[str, int] = {}
 
@@ -104,8 +113,11 @@ class Orchestrator:
                 _emit({"status": "error", "phase": "collect", "source": collector_name, "error": str(e)})
 
         total = sum(by_collector.values())
-        _emit({"status": "done", "phase": "collect", "total": total, "by_collector": by_collector})
-        return {"total": total, "by_collector": by_collector}
+        result: dict[str, Any] = {"total": total, "by_collector": by_collector}
+        if keywords:
+            result["keywords_filtered"] = keywords
+        _emit({"status": "done", "phase": "collect", **result})
+        return result
 
     def process(self, router, max_batches: int | None = None) -> dict[str, Any]:
         """
