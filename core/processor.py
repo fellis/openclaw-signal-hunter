@@ -48,12 +48,33 @@ class Processor:
 
     def process_all(self, max_batches: int | None = None) -> int:
         """
-        Process unclassified signals.
+        Process unclassified signals with an exclusive lock to prevent parallel cron runs.
         max_batches: if set, stop after processing this many LLM batches.
                      Useful for cron-based drip processing (e.g. 1 batch per run).
                      None means process everything available.
-        Returns count of processed signals.
+        Returns count of processed signals. Returns -1 if already running (lock held).
         """
+        import fcntl  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        lock_path = Path(__file__).parent.parent / ".processor.lock"
+        lock_file = open(lock_path, "w")  # noqa: WPS515
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            log.warning("[processor] another instance is already running, skipping this run")
+            lock_file.close()
+            return -1
+
+        try:
+            return self._run_batches(max_batches)
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            lock_file.close()
+            lock_path.unlink(missing_ok=True)
+
+    def _run_batches(self, max_batches: int | None = None) -> int:
+        """Internal: actual batch processing loop (called with lock held)."""
         total = 0
         batches_done = 0
 

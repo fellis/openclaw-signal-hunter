@@ -123,6 +123,10 @@ class Orchestrator:
         _emit({"status": "running", "phase": "process",
                "mode": f"max_batches={max_batches}" if max_batches else "all"})
         total = processor.process_all(max_batches=max_batches)
+        if total == -1:
+            _emit({"status": "skipped", "phase": "process",
+                   "note": "Another processing run is already active. Skipping to avoid duplicates."})
+            return {"total": 0, "remaining": self._storage.count_unprocessed(), "skipped": True}
         remaining = self._storage.count_unprocessed()
         _emit({"status": "done", "phase": "process", "total": total, "remaining": remaining})
         return {"total": total, "remaining": remaining}
