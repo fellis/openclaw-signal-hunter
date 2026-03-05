@@ -53,17 +53,21 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_status',
       description:
-        'Get Signal Hunter system status: tracked keywords, signal counts, ' +
-        'embedding queue, monthly LLM cost. ' +
-        'Triggers: "signal hunter status", "how many signals", "sh status".',
+        'Get Signal Hunter full status: tracked keywords, signal counts, embedding queue, ' +
+        'monthly LLM cost, AND current processor/filter configuration. ' +
+        'Use this to show processing settings (signals_per_batch, batches_per_run, etc.). ' +
+        'Triggers: "signal hunter status", "how many signals", "sh status", ' +
+        '"покажи настройки", "покажи конфиг", "настройки обработки", "show config".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'status');
         if (!result.success) return text(`Status failed: ${result.error}`);
         const d = result.data as Record<string, unknown>;
-        const sig = d?.signals as Record<string, unknown> ?? {};
-        const costs = d?.llm_cost_month_usd as Record<string, number> ?? {};
+        const sig = (d?.signals as Record<string, unknown>) ?? {};
+        const costs = (d?.llm_cost_month_usd as Record<string, number>) ?? {};
         const keywords = (d?.keywords as string[]) ?? [];
+        const proc = (d?.processor_config as Record<string, unknown>) ?? {};
+        const filters = (d?.filters_config as Record<string, unknown>) ?? {};
         const lines = [
           `**Signal Hunter Status**`,
           `Keywords: ${keywords.join(', ') || 'none'}`,
@@ -71,6 +75,15 @@ export function createTools(cfg: RunnerConfig): Tool[] {
           `Processed: ${sig.processed ?? 0} (relevant: ${sig.relevant ?? 0})`,
           `Unprocessed: ${sig.unprocessed ?? 0} | Embed pending: ${sig.embed_pending ?? 0}`,
           `LLM cost this month: $${(costs.total ?? 0).toFixed(4)}`,
+          ``,
+          `**Processor config:**`,
+          `  signals_per_batch: ${proc.signals_per_batch ?? 10}`,
+          `  batches_per_run: ${proc.batches_per_run ?? 3}`,
+          `  max_tokens_per_batch: ${proc.max_tokens_per_batch ?? 10000}`,
+          `  max_body_chars: ${proc.max_body_chars ?? 1000}`,
+          ``,
+          `**Filters:**`,
+          `  min_score: ${filters.min_score ?? 0} | max_age_days: ${filters.max_age_days ?? 90}`,
         ];
         return text(lines.join('\n'));
       },
