@@ -158,7 +158,7 @@ class LLMRouter:
             self._openai_client = OpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                timeout=90.0,
+                timeout=500.0,
                 http_client=httpx.Client(verify=ssl_verify),
             )
             self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
