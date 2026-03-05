@@ -487,6 +487,143 @@ class PostgresStorage:
                 return [dict(row) for row in cur.fetchall()]
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # LLM task queue
+    # ------------------------------------------------------------------
+
+    def enqueue_llm_task(self, task_type: str, priority: int, payload: dict) -> str:
+        """Add a task to the LLM queue. Returns task id."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO llm_task_queue (task_type, priority, payload)
+                    VALUES (%s, %s, %s)
+                    RETURNING id
+                    """,
+                    (task_type, priority, json.dumps(payload)),
+                )
+                return str(cur.fetchone()["id"])
+
+    def claim_next_llm_task(self) -> dict[str, Any] | None:
+        """
+        Atomically claim the next pending task (highest priority, oldest first).
+        Uses FOR UPDATE SKIP LOCKED to prevent double-claim.
+        Returns None if queue is empty.
+        """
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE llm_task_queue
+                    SET status = 'running', started_at = now()
+                    WHERE id = (
+                        SELECT id FROM llm_task_queue
+                        WHERE status = 'pending'
+                        ORDER BY priority ASC, created_at ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    RETURNING id, task_type, payload
+                    """
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": str(row["id"]),
+                    "task_type": row["task_type"],
+                    "payload": row["payload"],
+                }
+
+    def complete_llm_task(self, task_id: str) -> None:
+        """Delete a successfully completed task from the queue."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute("DELETE FROM llm_task_queue WHERE id = %s", (task_id,))
+
+    def fail_llm_task(self, task_id: str, error: str) -> None:
+        """
+        Increment retry_count. After 3 failures mark as 'failed' (permanent).
+        Otherwise reset to 'pending' for retry.
+        """
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE llm_task_queue
+                    SET
+                        retry_count = retry_count + 1,
+                        error       = %s,
+                        status      = CASE
+                            WHEN retry_count + 1 >= 3 THEN 'failed'
+                            ELSE 'pending'
+                        END,
+                        started_at  = NULL
+                    WHERE id = %s
+                    """,
+                    (error[:2000], task_id),
+                )
+
+    def has_running_llm_task(self) -> bool:
+        """Return True if any task is currently in 'running' status."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "SELECT 1 FROM llm_task_queue WHERE status = 'running' LIMIT 1"
+                )
+                return cur.fetchone() is not None
+
+    def has_pending_process_batch(self) -> bool:
+        """Return True if a process_batch task is pending or running."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM llm_task_queue
+                    WHERE task_type = 'process_batch'
+                      AND status IN ('pending', 'running')
+                    LIMIT 1
+                    """
+                )
+                return cur.fetchone() is not None
+
+    def reset_stuck_llm_tasks(self, timeout_minutes: int = 10) -> int:
+        """
+        Reset tasks stuck in 'running' for longer than timeout_minutes.
+        Returns count of reset tasks.
+        """
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE llm_task_queue
+                    SET
+                        status      = 'pending',
+                        started_at  = NULL,
+                        error       = 'Reset: task was stuck in running state'
+                    WHERE status = 'running'
+                      AND started_at < now() - (%s || ' minutes')::interval
+                    """,
+                    (str(timeout_minutes),),
+                )
+                return cur.rowcount
+
+    def get_llm_queue_status(self) -> list[dict[str, Any]]:
+        """Return all current queue entries ordered by priority and age."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT id, task_type, priority, status, retry_count,
+                           error, payload, created_at, started_at
+                    FROM llm_task_queue
+                    ORDER BY priority ASC, created_at ASC
+                    """
+                )
+                return [dict(r) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
     # LLM usage logging
     # ------------------------------------------------------------------
 

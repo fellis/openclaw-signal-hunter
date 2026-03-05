@@ -189,26 +189,6 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // Process
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_process',
-      description:
-        'Run LLM classification on unprocessed raw signals. ' +
-        'NOTE: classification runs automatically via cron every 2 minutes. ' +
-        'Call this manually ONLY if user explicitly asks to classify right now, ' +
-        'or needs immediate results without waiting for cron. ' +
-        'Triggers: "process signals now", "classify immediately", "run LLM right now".',
-      parameters: { type: 'object', properties: {} },
-      async execute() {
-        const result = await runSkillCommand(cfg, 'process');
-        if (!result.success) return text(`Process failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        return text(`Processing done. Signals classified: **${d?.total ?? 0}**`);
-      },
-    },
-
-    // ----------------------------------------------------------------
     // Embed
     // ----------------------------------------------------------------
     {
@@ -225,34 +205,6 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         if (!result.success) return text(`Embed failed: ${result.error}`);
         const d = result.data as Record<string, unknown>;
         return text(`Embedding done. Vectors upserted: **${d?.total ?? 0}**`);
-      },
-    },
-
-    // ----------------------------------------------------------------
-    // Full cycle
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_full_cycle',
-      description:
-        'Run full pipeline: collect → process → embed in one shot. ' +
-        'IMPORTANT: use this ONLY when user explicitly asks for a full pipeline run. ' +
-        'Do NOT use after a regular collect - cron handles process and embed automatically. ' +
-        'Do NOT use just because there are unprocessed signals - cron will get to them. ' +
-        'Use ONLY for: one-time full sync when cron is not set up, ' +
-        'or user explicitly says "full cycle" / "full update" / "sync everything now". ' +
-        'Triggers: "full cycle", "full update", "sync everything now", "запусти полный цикл".',
-      parameters: { type: 'object', properties: {} },
-      async execute() {
-        const result = await runSkillCommand(cfg, 'full_cycle');
-        if (!result.success) return text(`Full cycle failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        const lines = [
-          `**Full cycle complete:**`,
-          `Collected: ${d?.collected ?? 0} new signals`,
-          `Processed: ${d?.processed ?? 0} signals`,
-          `Embedded: ${d?.embedded ?? 0} vectors`,
-        ];
-        return text(lines.join('\n'));
       },
     },
 
@@ -566,48 +518,117 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // Set process schedule
+    // LLM Worker - queue resolve
     // ----------------------------------------------------------------
     {
-      name: 'signal_hunter_set_process_schedule',
+      name: 'signal_hunter_queue_resolve',
       description:
-        'Configure auto-processing schedule: how many batches per cron run and how many signals per batch. ' +
-        'Default: 3 batches per run, 10 signals per batch, cron every 5 min. ' +
-        'Returns cron_job_id to then update the cron interval via cron.update. ' +
-        'Triggers: "обработай 3 батча каждые 5 минут", "поставь 10 сигналов в батче", ' +
-        '"set batches to 5", "change auto-processing schedule", ' +
-        '"сколько сигналов в батче", "how many signals per batch". ' +
-        'WORKFLOW: 1) call this tool with batches_per_run and/or signals_per_batch, ' +
-        '2) then call cron.update with the returned cron_job_id to change the cron interval. ' +
-        'NOTE: signals_per_batch default 10 is safe for the current LLM server (nginx timeout 60s). ' +
-        'Increasing above 15 may cause timeouts.',
+        'Add a list of keywords to the LLM task queue for background resolve and auto-approve. ' +
+        'The worker processes one keyword per cron tick (every minute). ' +
+        'Keywords that already have a profile are skipped automatically. ' +
+        'Use this instead of signal_hunter_resolve when adding many keywords at once. ' +
+        'Triggers: "добавь ключевики в очередь", "поставь в очередь resolve", ' +
+        '"queue resolve for LangGraph and CrewAI", "bulk add keywords", ' +
+        '"добавь список ключевиков".',
       parameters: {
         type: 'object',
         properties: {
-          batches_per_run: {
-            type: 'number',
-            description:
-              'Number of LLM batches to run per cron execution (default 3). ' +
-              'null = process all unprocessed signals per run.',
+          keywords: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of keywords to resolve and auto-approve',
           },
-          signals_per_batch: {
+        },
+        required: ['keywords'],
+      },
+      async execute(_id, params) {
+        const p = params as { keywords: string[] };
+        const json = JSON.stringify({ keywords: p.keywords });
+        const result = await runSkillCommand(cfg, 'queue_resolve', json);
+        if (!result.success) return text(`Queue resolve failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        return text(
+          `**Queue resolve:** ${d?.queued ?? 0} keywords added to queue` +
+          (d?.skipped_existing ? `, ${d.skipped_existing} already resolved (skipped)` : '') +
+          `.\n\n${d?.note ?? ''}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // LLM Worker - queue status
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_queue_status',
+      description:
+        'Show the current LLM task queue: pending, running, and failed tasks. ' +
+        'Triggers: "что в очереди", "сколько задач осталось", "покажи очередь", ' +
+        '"queue status", "how many keywords left to resolve".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'queue_status');
+        if (!result.success) return text(`Queue status failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        const tasks = d?.tasks as Record<string, Array<{ task_type: string; payload: Record<string, unknown>; error?: string }>> ?? {};
+        const lines: string[] = [
+          `**LLM Task Queue:**`,
+          `Pending: **${d?.pending ?? 0}** | Running: **${d?.running ?? 0}** | Failed: **${d?.failed ?? 0}**`,
+        ];
+        if ((d?.pending as number) > 0) {
+          const pending = tasks['pending'] ?? [];
+          lines.push(`\n**Pending:**`);
+          pending.slice(0, 10).forEach(t => {
+            const label = t.task_type === 'resolve' ? t.payload?.keyword : t.task_type;
+            lines.push(`- ${label}`);
+          });
+          if (pending.length > 10) lines.push(`- ...and ${pending.length - 10} more`);
+        }
+        if ((d?.failed as number) > 0) {
+          const failed = tasks['failed'] ?? [];
+          lines.push(`\n**Failed:**`);
+          failed.forEach(t => {
+            const label = t.task_type === 'resolve' ? t.payload?.keyword : t.task_type;
+            lines.push(`- ${label}: ${t.error ?? 'unknown error'}`);
+          });
+        }
+        return text(lines.join('\n'));
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // LLM Worker - set interval
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_set_worker_interval',
+      description:
+        'Configure the LLM worker cron interval and get the cron_job_id to set the schedule. ' +
+        'The worker processes one LLM task per tick (resolve or process_batch). ' +
+        'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and schedule. ' +
+        'Default: every minute (* * * * *). OpenClaw minimum granularity is 1 minute. ' +
+        'Triggers: "настрой воркер", "измени частоту LLM воркера", ' +
+        '"set worker interval", "configure worker schedule", ' +
+        '"как часто работает воркер", "создай крон для воркера".',
+      parameters: {
+        type: 'object',
+        properties: {
+          interval_seconds: {
             type: 'number',
-            description:
-              'Max signals per LLM batch (default 10). ' +
-              'Controls LLM response time - keep at 10 unless nginx timeout is increased. ' +
-              'At ~37 tok/s: 10 signals * 200 output tokens = ~54s (safe under 60s limit).',
+            description: 'Polling interval in seconds (default 60, minimum 60 due to cron granularity)',
           },
         },
         required: [],
       },
       async execute(_id, params) {
-        const p = params as { batches_per_run?: number | null; signals_per_batch?: number };
-        const json = JSON.stringify({
-          batches_per_run: p.batches_per_run ?? 3,
-          signals_per_batch: p.signals_per_batch ?? 10,
-        });
-        const result = await runSkillCommand(cfg, 'set_process_schedule', json);
-        return text(formatResult(result));
+        const p = params as { interval_seconds?: number };
+        const json = JSON.stringify({ interval_seconds: p.interval_seconds ?? 60 });
+        const result = await runSkillCommand(cfg, 'set_worker_interval', json);
+        if (!result.success) return text(`Set worker interval failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        return text(
+          `**Worker interval configured:** ${d?.interval_seconds}s\n\n` +
+          `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
+          `${d?.note ?? ''}`
+        );
       },
     },
 

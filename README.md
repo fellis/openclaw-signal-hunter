@@ -43,17 +43,18 @@ OpenClaw chat
      │
      ▼
 src/index.ts          ← OpenClaw plugin entry (register tools + /sh command)
-src/tools.ts          ← 25 tool definitions (thin TS wrappers)
+src/tools.ts          ← tool definitions (thin TS wrappers)
 src/runner.ts         ← spawns: python -m skill <command> [args]
      │
      ▼  JSON via stdout
-skill/main.py         ← CLI dispatcher (25 commands)
+skill/main.py         ← CLI dispatcher
      │
      ├── core/resolver.py      ← keyword discovery + LLM enrichment
-     ├── core/orchestrator.py  ← collect → process → embed pipeline
+     ├── core/orchestrator.py  ← collect → embed pipeline (process moved to worker)
      ├── core/processor.py     ← LLM classification (token-aware batching)
      ├── core/embedder.py      ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py    ← routes ops to local/Claude by config
+     ├── core/llm_worker.py    ← LLM task queue worker (one task per cron tick)
      │
      ├── collectors/
      │   ├── github.py         ← GitHub Issues (repo-scoped, cursor on updated_at)
@@ -63,7 +64,7 @@ skill/main.py         ← CLI dispatcher (25 commands)
      │   └── reddit.py         ← Reddit JSON API / OAuth (60 req/min with token)
      │
      └── storage/
-         ├── postgres.py       ← all SQL (raw_signals, processed_signals, cursors...)
+         ├── postgres.py       ← all SQL (raw_signals, processed_signals, llm_task_queue...)
          ├── vector.py         ← Qdrant wrapper
          └── config_manager.py ← atomic config.json writes (temp file + rename)
 
@@ -78,7 +79,8 @@ Docker Compose services:
 - Each collector is a self-contained module implementing `BaseCollector`
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
-- Token-aware batching for LLM classification (validated: ~10 signals per batch, nginx-safe)
+- Token-aware batching for LLM classification (validated: ~10 signals per batch)
+- **LLM Task Queue:** all local LLM calls go through `llm_task_queue` table - one task at a time, no GPU contention. Priority: resolve(50) > process_batch(90).
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
 - Embedder runs as a persistent Docker service: model loads once at startup, all encode calls go via HTTP - no per-run model reload overhead
 - Anti-hallucination gate on query answers: URLs not in source data are stripped
@@ -440,13 +442,15 @@ You: this looks good, save this as the report template for ollama
 
 ### Step 9 - Automation (cron)
 
-For continuous background operation, configure two cron jobs via OpenClaw:
+For continuous background operation, configure three cron jobs via OpenClaw:
 
-**Processing (classify new signals):**
+**LLM Worker (classify signals + resolve keywords):**
 ```
-You: set process schedule - 3 batches per run
+You: настрой воркер
 ```
-Then via `cron.update` with `expr: "*/2 * * * *"` - runs every 2 minutes, processes 3 × 10 = 30 signals per run.
+The bot creates a cron job `* * * * *` (every minute). The worker picks the next task from `llm_task_queue` and executes it - one task per tick, no GPU contention:
+- `resolve` tasks (priority 50) - keyword enrichment from bulk queue
+- `process_batch` tasks (priority 90) - signal classification, auto-enqueued when signals need processing
 
 **Embedding (vectorize classified signals):**
 ```
@@ -454,17 +458,21 @@ You: set embed schedule - 128 items per run
 ```
 Then via `cron.update` with `expr: "*/10 * * * *"` - runs every 10 minutes, embeds up to 128 signals per run.
 
-Both cron jobs run silently (`delivery.mode: none`) - no Telegram noise.
-
-**Full cycle (manual or less frequent):**
+**Collection (fetch new signals):**
 ```
-You: /sh update
+You: set collect schedule
 ```
+Then via `cron.update` with `expr: "0 8,20 * * *"` (twice a day at 08:00 and 20:00).
 
-Or via CLI:
-```bash
-cd /path/to/signal-hunter
-python -m skill full_cycle
+All cron jobs run silently (`delivery.mode: none`) - no Telegram noise.
+
+**Adding many keywords at once (bulk queue):**
+```
+You: добавь в очередь LangGraph, CrewAI, AutoGen, PydanticAI, Semantic Kernel
+```
+The bot queues all keywords. The worker resolves one per minute and auto-approves collection plans. Check progress:
+```
+You: что в очереди?
 ```
 
 ---
@@ -500,24 +508,26 @@ Or via slash command: `/sh embedder [status|start|stop|restart|logs|build]`
 
 | Command | Description |
 |---|---|
-| `status` | System stats: signal counts, embed queue, monthly LLM cost, processor config |
+| `status` | System stats: signal counts, embed queue, monthly LLM cost |
 | `check_sources` | API readiness and rate limits for all sources |
 | `get_setup_guide <source>` | Step-by-step credential instructions |
 | `set_credentials <json>` | Save API credentials to config |
-| `resolve <keyword>` | Discover + propose collection plan |
+| `resolve <keyword>` | Discover + propose collection plan (one keyword, interactive) |
+| `queue_resolve <json>` | Add many keywords to background queue `{"keywords": [...]}` |
+| `queue_status` | Show LLM task queue: pending / running / failed |
+| `run_worker` | Execute next LLM task from queue (called by cron every minute) |
+| `set_worker_interval <json>` | Configure worker cron interval `{"interval_seconds": 60}` |
 | `approve_plan <json>` | Save approved collection plan |
 | `update_plan <json>` | Add or remove targets from a plan |
 | `refresh_profile <keyword>` | Re-run discovery, update cached profile |
 | `list_keywords` | List all tracked keywords |
 | `collect` | Collect from all approved plans (incremental) |
-| `process` | LLM classification of unprocessed signals |
 | `embed` | Vectorize pending signals into Qdrant |
-| `full_cycle` | collect + process + embed in sequence |
 | `reprocess <json>` | Delete and reclassify signals for a keyword |
 | `suggest_rules <keyword>` | Analyze real posts, suggest extraction rules |
 | `approve_rules <json>` | Save approved rules to config |
-| `set_process_schedule <json>` | Configure batches per run and signals per batch for cron |
 | `set_embed_schedule <json>` | Configure max items per embed cron run |
+| `set_collect_schedule <json>` | Configure collect cron schedule |
 | `embedder_service <json>` | Manage embedder Docker container (status/start/stop/restart/logs/build) |
 | `query <prompt>` | Semantic search + LLM synthesis |
 | `generate_change_report <keyword>` | Delta report since last snapshot |
@@ -625,6 +635,7 @@ PostgreSQL tables:
 | `keyword_profiles` | Discovered + enriched keyword metadata |
 | `keyword_collection_plans` | Approved collection plans |
 | `change_report_snapshots` | Saved report history |
+| `llm_task_queue` | LLM task queue (resolve / process_batch), priority-ordered |
 | `llm_usage_log` | Token usage and cost per operation |
 
 ---
@@ -639,13 +650,6 @@ rank_score = (0.3 * log10(1 + engagement) + 0.7 * (intensity/5) * confidence)
 Weights: engagement 30%, quality (intensity × confidence) 70%, half-life 7 days.
 
 ---
-
-## Known limitations
-
-| Issue | Status | Workaround |
-|---|---|---|
-| nginx `proxy_read_timeout 60s` causes 504 on large LLM batches | Partial | `max_signals_per_batch=10` keeps each call under 54s |
-| Full nginx fix requires SSH to internal proxy server | Pending | Raise `proxy_read_timeout 300s` on internal nginx when access available |
 
 ---
 

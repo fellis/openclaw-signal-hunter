@@ -203,23 +203,6 @@ def cmd_collect() -> None:
     _out({"status": "done", "phase": "collect", **result})
 
 
-def cmd_process() -> None:
-    """
-    Run LLM classification on unprocessed signals.
-    In cron mode (processor.max_batches_per_run set): processes N batches and exits.
-    In full mode (default): processes all available signals.
-    """
-    from core.orchestrator import Orchestrator  # noqa: PLC0415
-
-    config = _load_config()
-    storage = _make_storage()
-    router = _make_router(config)
-    orch = Orchestrator(config, storage)
-    max_batches = config.get("processor", {}).get("max_batches_per_run", None)
-    result = orch.process(router, max_batches=max_batches)
-    _out({"status": "done", "phase": "process", **result})
-
-
 def cmd_embed() -> None:
     """Embed pending signals into Qdrant."""
     from core.orchestrator import Orchestrator  # noqa: PLC0415
@@ -230,29 +213,6 @@ def cmd_embed() -> None:
     orch = Orchestrator(config, storage)
     result = orch.embed_pending(device=device)
     _out({"status": "done", "phase": "embed", **result})
-
-
-def cmd_full_cycle() -> None:
-    """Run collect + process + embed in sequence."""
-    from core.orchestrator import Orchestrator  # noqa: PLC0415
-
-    config = _load_config()
-    storage = _make_storage()
-    router = _make_router(config)
-    device = config.get("embedder", {}).get("device", "cpu")
-
-    orch = Orchestrator(config, storage)
-    collect_result = orch.collect()
-    process_result = orch.process(router)
-    embed_result = orch.embed_pending(device=device)
-
-    _out({
-        "status": "done",
-        "phase": "full_cycle",
-        "collected": collect_result.get("total", 0),
-        "processed": process_result.get("total", 0),
-        "embedded": embed_result.get("total", 0),
-    })
 
 
 def cmd_reprocess(json_str: str) -> None:
@@ -435,22 +395,44 @@ def cmd_set_routing(json_str: str) -> None:
           "message": f"llm_routing.{operation} → {provider}"})
 
 
-_SH_CRON_JOB_ID = "7a3f9b2c-4e1d-4c8a-b5f6-0d2e8a1c9b3f"
 _SH_EMBED_CRON_JOB_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 _SH_COLLECT_CRON_JOB_ID = "c9d4e5f6-a7b8-4c2d-9e0f-1a2b3c4d5e6f"
+_SH_WORKER_CRON_JOB_ID = "e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b"
 
 
-def cmd_set_process_schedule(json_str: str) -> None:
+# ------------------------------------------------------------------
+# LLM Worker commands
+# ------------------------------------------------------------------
+
+def cmd_run_worker(json_str: str = "{}") -> None:
     """
-    Configure scheduled processing parameters.
-    json_str: '{"batches_per_run": 3, "signals_per_batch": 10}'
+    Execute the next pending LLM task from the queue.
+    Called by cron on every tick (default: every minute).
 
-    batches_per_run: how many LLM batches per cron run (default 3, null = all)
-    signals_per_batch: max signals per LLM batch (default 10, controls response time)
-      - At ~37 tok/s with nginx timeout 60s: 10 signals * ~200 output tok = ~54s (safe)
-      - Increase only if nginx timeout is raised
+    Behavior:
+      1. Reset tasks stuck in 'running' for > 10 min (crash recovery)
+      2. Skip if another task is still running
+      3. Auto-enqueue process_batch if unprocessed signals exist and queue is empty
+      4. Claim and execute the next pending task (by priority then age)
+      5. On success: delete task. On error: retry up to 3 times then mark 'failed'.
+    """
+    from core.llm_worker import LLMWorker  # noqa: PLC0415
 
-    The cron interval is managed via OpenClaw's cron.update using the returned cron_job_id.
+    config = _load_config()
+    storage = _make_storage()
+    worker = LLMWorker(config, storage)
+    result = worker.run_once()
+    _out(result)
+
+
+def cmd_queue_resolve(json_str: str) -> None:
+    """
+    Add keywords to the LLM task queue for background resolve + auto-approve.
+    json_str: '{"keywords": ["LangGraph", "CrewAI", ...]}'
+
+    Each keyword is resolved and its collection plan is automatically approved
+    by the worker (no manual approve_plan step needed for bulk queues).
+    Keywords that already have a profile are skipped.
     """
     try:
         data = json.loads(json_str)
@@ -458,26 +440,101 @@ def cmd_set_process_schedule(json_str: str) -> None:
         _err(f"Invalid JSON: {e}")
         return
 
-    batches_per_run = data.get("batches_per_run", 3)
-    signals_per_batch = data.get("signals_per_batch", 10)
+    keywords = data.get("keywords", [])
+    if not keywords:
+        _err("'keywords' list is required")
+        return
+
+    storage = _make_storage()
+    added = 0
+    skipped = 0
+    for kw in keywords:
+        existing = storage.get_keyword_profile(kw)
+        if existing:
+            skipped += 1
+            continue
+        storage.enqueue_llm_task(
+            task_type="resolve",
+            priority=50,
+            payload={"keyword": kw},
+        )
+        added += 1
+
+    _out({
+        "status": "ok",
+        "queued": added,
+        "skipped_existing": skipped,
+        "total": len(keywords),
+        "note": (
+            f"{added} keywords added to queue, {skipped} skipped (already resolved). "
+            "Worker processes one per cron tick. Check progress with sh_queue_status."
+        ),
+    })
+
+
+def cmd_queue_status() -> None:
+    """Show current LLM task queue: pending, running, failed tasks."""
+    storage = _make_storage()
+    tasks = storage.get_llm_queue_status()
+
+    by_status: dict = {"pending": [], "running": [], "failed": []}
+    for t in tasks:
+        entry: dict = {
+            "task_type": t["task_type"],
+            "payload": t["payload"],
+        }
+        if t.get("retry_count"):
+            entry["retry_count"] = t["retry_count"]
+        if t.get("error"):
+            entry["error"] = t["error"]
+        by_status.setdefault(t["status"], []).append(entry)
+
+    _out({
+        "status": "ok",
+        "total": len(tasks),
+        "pending": len(by_status.get("pending", [])),
+        "running": len(by_status.get("running", [])),
+        "failed": len(by_status.get("failed", [])),
+        "tasks": by_status,
+    })
+
+
+def cmd_set_worker_interval(json_str: str) -> None:
+    """
+    Configure the LLM worker cron interval and save to config.
+    Returns cron_job_id to update the cron schedule via cron.update.
+    json_str: '{"interval_seconds": 60}'
+
+    Note: OpenClaw cron minimum granularity is 1 minute (* * * * *).
+    The interval_seconds is stored in config for reference.
+    Recommended: * * * * * (every minute).
+    """
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        _err(f"Invalid JSON: {e}")
+        return
+
+    interval_seconds = int(data.get("interval_seconds", 60))
 
     cm = _make_config_manager()
     config = cm.load()
-    proc = config.setdefault("processor", {})
-    proc["max_batches_per_run"] = batches_per_run
-    proc["max_signals_per_batch"] = signals_per_batch
+    config.setdefault("worker", {})["interval_seconds"] = interval_seconds
     cm.save(config)
 
     _out({
         "status": "ok",
-        "batches_per_run": batches_per_run,
-        "signals_per_batch": signals_per_batch,
-        "cron_job_id": _SH_CRON_JOB_ID,
+        "interval_seconds": interval_seconds,
+        "cron_job_id": _SH_WORKER_CRON_JOB_ID,
         "note": (
-            f"Config saved: {batches_per_run} batch(es) per cron run, "
-            f"{signals_per_batch} signals per batch. "
-            f"To change the interval, call cron.update with jobId='{_SH_CRON_JOB_ID}' "
-            "and patch.schedule (e.g. {\"kind\": \"cron\", \"expr\": \"*/5 * * * *\"})."
+            f"Worker interval set to {interval_seconds}s (stored in config). "
+            f"To create or update the worker cron job, call cron.update with "
+            f"jobId='{_SH_WORKER_CRON_JOB_ID}', "
+            f"name='Signal Hunter - LLM Worker', "
+            f"message='Run sh_worker to process next LLM task. "
+            f"Report: what was processed, or say queue is idle/busy.' "
+            f"and patch.schedule. "
+            f"Recommended: {{\"kind\": \"cron\", \"expr\": \"* * * * *\"}} (every minute)."
         ),
     })
 
@@ -821,9 +878,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "approve_plan":             (cmd_approve_plan, True),
     "update_plan":              (cmd_update_plan, True),
     "collect":                  (cmd_collect, False),
-    "process":                  (cmd_process, False),
     "embed":                    (cmd_embed, False),
-    "full_cycle":               (cmd_full_cycle, False),
     "reprocess":                (cmd_reprocess, True),
     "query":                    (cmd_query, True),
     "check_sources":            (cmd_check_sources, False),
@@ -831,7 +886,10 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_credentials":          (cmd_set_credentials, True),
     "list_providers":           (cmd_list_providers, False),
     "set_routing":              (cmd_set_routing, True),
-    "set_process_schedule":     (cmd_set_process_schedule, True),
+    "run_worker":               (cmd_run_worker, False),
+    "queue_resolve":            (cmd_queue_resolve, True),
+    "queue_status":             (cmd_queue_status, False),
+    "set_worker_interval":      (cmd_set_worker_interval, True),
     "set_embed_schedule":       (cmd_set_embed_schedule, True),
     "set_collect_schedule":     (cmd_set_collect_schedule, True),
     "suggest_rules":            (cmd_suggest_rules, True),

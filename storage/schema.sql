@@ -91,6 +91,22 @@ CREATE TABLE IF NOT EXISTS change_report_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_report_snapshots_keyword ON change_report_snapshots (keyword, generated_at DESC);
 
+CREATE TABLE IF NOT EXISTS llm_task_queue (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_type    TEXT        NOT NULL,
+    priority     SMALLINT    NOT NULL DEFAULT 50,
+    payload      JSONB       NOT NULL DEFAULT '{}',
+    status       TEXT        NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending', 'running', 'failed')),
+    retry_count  SMALLINT    NOT NULL DEFAULT 0,
+    error        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_llm_task_queue_next
+    ON llm_task_queue (priority ASC, created_at ASC)
+    WHERE status = 'pending';
+
 CREATE TABLE IF NOT EXISTS llm_usage_log (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     provider        TEXT NOT NULL,
