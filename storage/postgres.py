@@ -629,6 +629,19 @@ class PostgresStorage:
                 )
                 return cur.rowcount
 
+    def retry_failed_llm_tasks(self) -> int:
+        """Reset all 'failed' tasks back to 'pending' with retry_count=0."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE llm_task_queue
+                    SET status = 'pending', retry_count = 0, error = NULL, started_at = NULL
+                    WHERE status = 'failed'
+                    """
+                )
+                return cur.rowcount
+
     def get_llm_queue_status(self) -> list[dict[str, Any]]:
         """Return all current queue entries ordered by priority and age."""
         with self._conn() as conn:

@@ -527,6 +527,13 @@ def cmd_delete_keywords(json_str: str) -> None:
     })
 
 
+def cmd_retry_failed() -> None:
+    """Reset all 'failed' tasks back to 'pending' so the worker will retry them."""
+    storage = _make_storage()
+    count = storage.retry_failed_llm_tasks()
+    _out({"status": "ok", "reset": count, "note": f"{count} failed task(s) reset to pending."})
+
+
 def cmd_queue_status() -> None:
     """Show current LLM task queue: pending, running, failed tasks."""
     storage = _make_storage()
@@ -946,6 +953,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "queue_status":             (cmd_queue_status, False),
     "set_worker_interval":      (cmd_set_worker_interval, True),
     "delete_keywords":          (cmd_delete_keywords, True),
+    "retry_failed":             (cmd_retry_failed, False),
     "set_embed_schedule":       (cmd_set_embed_schedule, True),
     "set_collect_schedule":     (cmd_set_collect_schedule, True),
     "suggest_rules":            (cmd_suggest_rules, True),

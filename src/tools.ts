@@ -555,7 +555,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       },
     },
 
-    // ----------------------------------------------------------------
+            // ----------------------------------------------------------------
     // LLM Worker - run worker (called by cron)
     // ----------------------------------------------------------------
     {
@@ -576,6 +576,25 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         return text(
           `**Worker done:** ${d?.task_type ?? '?'} - ${d?.keyword ?? d?.status ?? 'ok'}`
         );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // LLM Worker - retry failed tasks
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_retry_failed',
+      description:
+        'Reset all failed LLM queue tasks back to pending so the worker retries them. ' +
+        'Useful when the LLM was temporarily unavailable and some resolve tasks failed. ' +
+        'Triggers: "перезапусти failed задачи", "retry failed", "повтори неудачные задачи", ' +
+        '"сбрось ошибки в очереди", "reset failed queue tasks".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'retry_failed');
+        if (!result.success) return text(`Retry failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        return text(`**Retry failed tasks:** ${d?.reset ?? 0} task(s) reset to pending.`);
       },
     },
 
