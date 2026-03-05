@@ -62,7 +62,7 @@ class GitHubCollector(BaseCollector):
         Returns top-20 repos by stars + issue count estimates.
         """
         log.info("[github] discover: keyword='%s'", keyword)
-        repos = self._search_repos(keyword, limit=20)
+        repos = self._search_repos(keyword, limit=30)
         return DiscoveredResources(repos=repos)
 
     def build_plan(self, profile: KeywordProfile) -> SearchPlan:
@@ -75,7 +75,7 @@ class GitHubCollector(BaseCollector):
         repos: list[dict] = github_resources.repos if github_resources else []
 
         targets: list[SearchTarget] = []
-        for repo in repos[:10]:
+        for repo in repos[:20]:
             full_name = repo.get("full_name", "")
             if not full_name:
                 continue
