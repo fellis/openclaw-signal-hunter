@@ -75,6 +75,7 @@ def cmd_resolve(keyword: str) -> None:
     """Discover and enrich a keyword, output proposal."""
     from core.registry import load_all_collectors  # noqa: PLC0415
     from core.resolver import KeywordResolver  # noqa: PLC0415
+    from storage.pending import PendingStore  # noqa: PLC0415
 
     config = _load_config()
     load_all_collectors()
@@ -82,6 +83,14 @@ def cmd_resolve(keyword: str) -> None:
     router = _make_router(config)
     resolver = KeywordResolver(router, storage)
     result = resolver.resolve(keyword)
+
+    # Save pending plan so approve_plan needs only canonical_name
+    pending = PendingStore()
+    pending.save("plan", {
+        "canonical_name": result.get("canonical_name", keyword),
+        "plans": result.get("proposed_plan", {}),
+    })
+
     _out(result)
 
 
@@ -101,21 +110,42 @@ def cmd_refresh_profile(keyword: str) -> None:
 
 def cmd_approve_plan(json_str: str) -> None:
     """
-    Save approved plan. json_str: '{"canonical_name": "...", "plans": {"github": [{...}]}}'
+    Save approved plan.
+    json_str: '{"canonical_name": "..."}' - reads plan from pending state (set by resolve).
+    Falls back to explicit plans if provided: '{"canonical_name": "...", "plans": {...}}'
     """
     from core.resolver import KeywordResolver  # noqa: PLC0415
+    from storage.pending import PendingStore  # noqa: PLC0415
 
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
         _err(f"Invalid JSON: {e}")
 
+    canonical_name = data.get("canonical_name", "")
+    plans = data.get("plans")
+
+    if not plans:
+        # Read from pending state saved by cmd_resolve
+        pending = PendingStore()
+        pending_data = pending.load("plan")
+        if pending_data:
+            plans = pending_data.get("plans", {})
+            if not canonical_name:
+                canonical_name = pending_data.get("canonical_name", "")
+            pending.clear("plan")
+
+    if not canonical_name:
+        _err("'canonical_name' is required")
+    if not plans:
+        _err("No plan found. Run sh_resolve first to generate a collection plan.")
+
     storage = _make_storage()
     config = _load_config()
     router = _make_router(config)
     resolver = KeywordResolver(router, storage)
-    resolver.approve_plan(data["canonical_name"], data["plans"])
-    _out({"status": "ok", "message": f"Plan approved for '{data['canonical_name']}'"})
+    resolver.approve_plan(canonical_name, plans)
+    _out({"status": "ok", "message": f"Plan approved for '{canonical_name}'"})
 
 
 def cmd_update_plan(json_str: str) -> None:
@@ -480,17 +510,48 @@ Return ONLY the JSON array. Examples must be real phrases from the posts above."
 
     try:
         rules = json.loads(raw)
-        _out({"keyword": keyword, "analyzed_posts": len(sample), "suggested_rules": rules})
     except json.JSONDecodeError:
-        _out({"keyword": keyword, "analyzed_posts": len(sample), "suggested_rules": raw})
+        rules = raw
+
+    # Save pending so approve_rules needs no parameters
+    if isinstance(rules, list):
+        from storage.pending import PendingStore  # noqa: PLC0415
+        PendingStore().save("rules", {"keyword": keyword, "rules": rules})
+
+    _out({"keyword": keyword, "analyzed_posts": len(sample), "suggested_rules": rules})
 
 
-def cmd_approve_rules(json_str: str) -> None:
-    """Save approved extraction rules to config.json."""
-    try:
-        rules = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        _err(f"Invalid JSON: {e}")
+def cmd_approve_rules(json_str: str = "") -> None:
+    """
+    Save approved extraction rules to config.json.
+    No arguments needed - reads rules from pending state set by suggest_rules.
+    Optional: pass explicit JSON array to override pending rules.
+    """
+    from storage.pending import PendingStore  # noqa: PLC0415
+
+    rules = None
+
+    # Try explicit JSON first (backwards compat)
+    if json_str.strip():
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, list):
+                rules = parsed
+            elif isinstance(parsed, dict) and "confirmed" in parsed:
+                pass  # fall through to pending
+        except json.JSONDecodeError:
+            pass
+
+    # Fall back to pending state
+    if rules is None:
+        pending = PendingStore()
+        pending_data = pending.load("rules")
+        if pending_data:
+            rules = pending_data.get("rules", [])
+            pending.clear("rules")
+
+    if not rules:
+        _err("No rules found. Run sh_suggest_rules first, or pass rules as JSON array.")
 
     cfg_mgr = _make_config_manager()
     cfg_mgr.set_nested(["extraction_rules"], rules)
@@ -531,27 +592,48 @@ def cmd_preview_change_report(json_str: str) -> None:
     router = _make_router(config)
     orch = Orchestrator(config, storage)
     preview = orch.preview_change_report(keyword, instructions, router)
+
+    # Save pending so approve_report_template needs no template param
+    from storage.pending import PendingStore  # noqa: PLC0415
+    PendingStore().save("report_template", {"keyword": keyword, "template": preview, "instructions": instructions})
+
     _out({"type": "preview", "keyword": keyword, "text": preview})
 
 
-def cmd_approve_report_template(json_str: str) -> None:
+def cmd_approve_report_template(json_str: str = "") -> None:
     """
     Save approved report template.
-    json_str: '{"keyword": "RAG", "template": "<text>"}' (template=null to reset)
+    No arguments needed - reads template from pending state set by preview_change_report.
+    Optional: '{"keyword": "RAG", "instructions": "focus on pain points"}' to override.
     """
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        _err(f"Invalid JSON: {e}")
+    from storage.pending import PendingStore  # noqa: PLC0415
+
+    data: dict = {}
+    if json_str.strip():
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
 
     keyword = data.get("keyword", "")
-    template = data.get("template")  # None = reset
+    template = data.get("template")
+    instructions = data.get("instructions")
+
+    # Read from pending if template not explicitly provided
+    if template is None:
+        pending = PendingStore()
+        pending_data = pending.load("report_template")
+        if pending_data:
+            template = pending_data.get("template")
+            if not keyword:
+                keyword = pending_data.get("keyword", "")
+            if not instructions:
+                instructions = pending_data.get("instructions", "")
+            pending.clear("report_template")
 
     cfg_mgr = _make_config_manager()
     cfg_mgr.set_nested(["change_report", "approved_template"], template)
-
-    # Save instructions too if provided
-    if instructions := data.get("instructions"):
+    if instructions:
         cfg_mgr.set_nested(["change_report", "instructions"], instructions)
 
     _out({
@@ -594,10 +676,10 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_routing":              (cmd_set_routing, True),
     "set_process_schedule":     (cmd_set_process_schedule, True),
     "suggest_rules":            (cmd_suggest_rules, True),
-    "approve_rules":            (cmd_approve_rules, True),
+    "approve_rules":            (cmd_approve_rules, False),
     "generate_change_report":   (cmd_generate_change_report, True),
     "preview_change_report":    (cmd_preview_change_report, True),
-    "approve_report_template":  (cmd_approve_report_template, True),
+    "approve_report_template":  (cmd_approve_report_template, False),
     "list_keywords":            (cmd_list_keywords, False),
 }
 
@@ -618,6 +700,12 @@ def main() -> None:
         if not provided:
             _err(f"Command '{command}' requires an argument.")
         handler(" ".join(provided))
+    elif provided:
+        # Optional argument - pass if provided, skip if not
+        try:
+            handler(" ".join(provided))
+        except TypeError:
+            handler()
     else:
         handler()
 

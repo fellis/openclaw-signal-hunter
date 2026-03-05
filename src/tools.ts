@@ -123,23 +123,22 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_approve_plan',
       description:
-        'Save an approved collection plan (from signal_hunter_resolve output). ' +
-        'The plan tells collectors which repos/queries to monitor. ' +
-        'Triggers: "approve plan for cursor.ai", "save collection plan", "confirm targets".',
+        'Save the collection plan that was proposed by signal_hunter_resolve. ' +
+        'The plan is saved automatically in pending state by resolve - just provide canonical_name. ' +
+        'Triggers: "approve plan for cursor.ai", "save collection plan", "confirm targets", "да approve".',
       parameters: {
         type: 'object',
         properties: {
-          canonical_name: { type: 'string', description: 'Keyword canonical name (lowercase)' },
-          plans: {
-            type: 'object',
-            description: 'Collector plans: {"github": [{query, scope, params}]}',
+          canonical_name: {
+            type: 'string',
+            description: 'Keyword canonical name (from resolve output, lowercase)',
           },
         },
-        required: ['canonical_name', 'plans'],
+        required: ['canonical_name'],
       },
       async execute(_id, params) {
-        const p = params as { canonical_name: string; plans: object };
-        const json = JSON.stringify({ canonical_name: p.canonical_name, plans: p.plans });
+        const p = params as { canonical_name: string };
+        const json = JSON.stringify({ canonical_name: p.canonical_name });
         const result = await runSkillCommand(cfg, 'approve_plan', json);
         return text(formatResult(result));
       },
@@ -262,8 +261,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
               `${i + 1}. **${r.name}** (priority ${r.priority ?? 1})\n   ${r.description}`
             ),
             ``,
-            `To approve all rules, call \`signal_hunter_approve_rules\` with this JSON:`,
-            `\`\`\`json\n${JSON.stringify(rules, null, 2)}\n\`\`\``,
+            `To save these rules, call \`signal_hunter_approve_rules\` (no parameters needed).`,
           ];
           return text(lines.join('\n'));
         }
@@ -277,22 +275,16 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_approve_rules',
       description:
-        'Save approved extraction rules to config. These rules are used by the LLM during process. ' +
-        'Triggers: "approve rules", "save these rules", "confirm rules".',
+        'Save the extraction rules that were suggested by signal_hunter_suggest_rules. ' +
+        'Rules are automatically saved in pending state by suggest_rules - no parameters needed. ' +
+        'Just call this after the user confirms they want to save the suggested rules. ' +
+        'Triggers: "approve rules", "save these rules", "confirm rules", "да сохрани правила".',
       parameters: {
         type: 'object',
-        properties: {
-          rules: {
-            type: 'array',
-            description: 'Array of rule objects: [{name, description, priority, examples}]',
-          },
-        },
-        required: ['rules'],
+        properties: {},
       },
-      async execute(_id, params) {
-        const p = params as { rules: unknown[] };
-        const json = JSON.stringify(p.rules);
-        const result = await runSkillCommand(cfg, 'approve_rules', json);
+      async execute() {
+        const result = await runSkillCommand(cfg, 'approve_rules');
         if (!result.success) return text(`Approve rules failed: ${result.error}`);
         const d = result.data as Record<string, unknown>;
         return text(`Rules saved: **${d?.rules_saved ?? 0}** rules in config.json`);
@@ -389,6 +381,15 @@ export function createTools(cfg: RunnerConfig): Tool[] {
           collector: { type: 'string', description: 'Collector name (github, reddit, hackernews, stackoverflow)', default: 'github' },
           add: {
             type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+                scope: { type: 'string' },
+                params: { type: 'object' },
+              },
+              required: ['query', 'scope'],
+            },
             description: 'Targets to add: [{query, scope, params}]',
           },
           remove: {
@@ -633,20 +634,21 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_approve_report_template',
       description:
-        'Save approved change report template. Pass null template to reset to instructions-only mode. ' +
-        'Triggers: "approve this format", "save report template", "confirm report format".',
+        'Save the change report template that was shown by signal_hunter_preview_change_report. ' +
+        'The template is saved automatically in pending state - no template text needed as param. ' +
+        'Optionally pass instructions to customize. ' +
+        'Triggers: "approve this format", "save report template", "confirm report format", "да сохрани шаблон".',
       parameters: {
         type: 'object',
         properties: {
-          keyword: { type: 'string', description: 'Keyword' },
-          template: { type: 'string', description: 'Approved template text (from preview). Pass null to reset.' },
-          instructions: { type: 'string', description: 'Updated instructions (optional)' },
+          keyword: { type: 'string', description: 'Keyword (optional, taken from preview if omitted)' },
+          instructions: { type: 'string', description: 'Optional updated instructions for future reports' },
         },
-        required: ['keyword'],
+        required: [],
       },
       async execute(_id, params) {
-        const p = params as { keyword: string; template?: string | null; instructions?: string };
-        const json = JSON.stringify({ keyword: p.keyword, template: p.template ?? null, instructions: p.instructions });
+        const p = params as { keyword?: string; instructions?: string };
+        const json = JSON.stringify({ keyword: p.keyword ?? '', instructions: p.instructions ?? '' });
         const result = await runSkillCommand(cfg, 'approve_report_template', json);
         return text(formatResult(result));
       },
