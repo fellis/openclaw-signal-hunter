@@ -68,7 +68,11 @@ class PostgresStorage:
         """
         Insert signal; skip on conflict (dedup_key already exists).
         Returns the UUID of the inserted row, or None if it was a duplicate.
+        Body is cleaned (HTML decoded, code blocks stripped) before storage
+        so all consumers (classifier, embedder, query) get consistent text.
         """
+        from storage.text_cleaner import clean_body  # noqa: PLC0415
+
         with self._conn() as conn:
             with self._cursor(conn) as cur:
                 cur.execute(
@@ -101,7 +105,7 @@ class PostgresStorage:
                         signal.source_id,
                         signal.url,
                         signal.title,
-                        signal.body,
+                        clean_body(signal.body),
                         signal.author,
                         signal.created_at,
                         signal.collected_at,

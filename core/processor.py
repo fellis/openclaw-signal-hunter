@@ -86,17 +86,23 @@ class Processor:
         Classify a batch. On failure, split in half and retry each chunk.
         Stops splitting when batch reaches a single signal (depth limit).
         Returns count of successfully classified signals.
+        Results are matched to raw signals by position (idx), not by id.
         """
         if not batch:
             return 0
         try:
             results = self._classify_batch(batch)
-            id_to_raw = {str(s["id"]): s for s in batch}
+            saved = 0
             for result in results:
-                ps = self._build_processed_signal(result, id_to_raw)
+                idx = result.get("idx")
+                if idx is None or not isinstance(idx, int) or idx >= len(batch):
+                    log.warning("[processor] result has invalid idx=%s (batch size=%d), skipping", idx, len(batch))
+                    continue
+                ps = self._build_processed_signal(result, batch[idx])
                 if ps:
                     self._storage.upsert_processed_signal(ps)
-            return len(batch)
+                    saved += 1
+            return saved
         except Exception as e:
             if len(batch) == 1 or depth >= 3:
                 log.error("[processor] signal %s failed permanently: %s", batch[0].get("id"), e)
@@ -151,17 +157,24 @@ class Processor:
     # ------------------------------------------------------------------
 
     def _classify_batch(self, batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Send batch to LLM, return parsed JSON list."""
+        """
+        Send batch to LLM, return parsed JSON list.
+        Output is matched by position (index), not by id, to avoid UUID corruption issues.
+        max_tokens scales with batch size: ~200 output tokens per signal.
+        """
         prompt = self._build_prompt(batch)
+        # ~200 output tokens per signal result, minimum 1024
+        max_tokens = max(1024, len(batch) * 200)
         call = LLMCall(
             operation="process",
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=4096,
+            max_tokens=max_tokens,
             temperature=0.0,
         )
+        log.debug("[processor] classify_batch: %d signals, max_tokens=%d", len(batch), max_tokens)
         raw = self._router.complete(call)
 
         # Strip markdown fences if LLM wraps response
@@ -184,20 +197,22 @@ class Processor:
             ensure_ascii=False,
             indent=2,
         )
+        # Use sequential index instead of UUID - avoids LLM UUID corruption.
+        # Matching in _build_processed_signal is done by position, not by id.
         signals_json = json.dumps(
-            [{"id": str(s["id"]), "text": s["_body"]} for s in batch],
+            [{"idx": i, "text": s["_body"]} for i, s in enumerate(batch)],
             ensure_ascii=False,
             indent=2,
         )
         return f"""Classification rules:
 {rules_json}
 
-Signals to classify (array of objects with "id" and "text"):
+Signals to classify (array of objects with "idx" index and "text"):
 {signals_json}
 
-For each signal return a JSON array with objects:
+For each signal return a JSON array in the SAME ORDER, one object per signal:
 {{
-  "id": "<same id from input>",
+  "idx": <same idx from input>,
   "is_relevant": true/false,
   "irrelevant_reason": "<short reason if not relevant, else null>",
   "language": "<ISO 639-1 language code of the original text>",
@@ -218,13 +233,11 @@ Return ONLY the JSON array, no markdown, no explanation.
     def _build_processed_signal(
         self,
         result: dict[str, Any],
-        id_to_raw: dict[str, dict[str, Any]],
+        raw: dict[str, Any],
     ) -> ProcessedSignal | None:
-        raw_id = result.get("id")
-        raw = id_to_raw.get(str(raw_id))
-        if not raw:
-            log.warning("[processor] LLM returned unknown id: %s", raw_id)
-            return None
+        """Build a ProcessedSignal from LLM result and the raw signal row.
+        raw is passed directly (matched by idx position, not by id).
+        """
 
         is_relevant = bool(result.get("is_relevant", False))
         matched_rule_ids: list[str] = result.get("matched_rules", [])

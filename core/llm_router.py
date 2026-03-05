@@ -143,6 +143,7 @@ class LLMRouter:
     # ------------------------------------------------------------------
 
     def _call_local(self, call: LLMCall) -> str:
+        import httpx  # noqa: PLC0415
         from openai import OpenAI  # noqa: PLC0415
 
         if self._openai_client is None:
@@ -153,8 +154,12 @@ class LLMRouter:
                     "LOCAL_LLM_BASE_URL env var is not set. "
                     "Local LLM config must be in .env, not in config.json."
                 )
+            ssl_verify = os.environ.get("LOCAL_LLM_SSL_VERIFY", "true").lower() != "false"
             self._openai_client = OpenAI(
-                api_key=api_key, base_url=base_url, timeout=500.0
+                api_key=api_key,
+                base_url=base_url,
+                timeout=500.0,
+                http_client=httpx.Client(verify=ssl_verify),
             )
             self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
 
