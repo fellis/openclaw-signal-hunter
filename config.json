@@ -1,0 +1,80 @@
+{
+  "keywords": [],
+
+  "extraction_rules": [],
+
+  "sources": {
+    "github":        {"enabled": true,  "credentials": {"api_token": "${GITHUB_TOKEN}"}},
+    "reddit":        {"enabled": false, "credentials": {}},
+    "hackernews":    {"enabled": false, "credentials": {}},
+    "stackoverflow": {"enabled": false, "credentials": {}},
+    "producthunt":   {"enabled": false, "credentials": {}},
+    "huggingface":   {"enabled": false, "credentials": {}}
+  },
+
+  "filters": {
+    "min_score": 0,
+    "max_age_days": 90,
+    "max_items_per_cycle": 200
+  },
+
+  "retention": {
+    "ttl_days": 365,
+    "irrelevant_ttl_days": 30
+  },
+
+  "processor": {
+    "batch_size": 25,
+    "max_tokens_per_batch": 20000
+  },
+
+  "llm_providers": {
+    "claude": {
+      "type": "anthropic",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "model": "claude-sonnet-4-5"
+    }
+  },
+
+  "llm_routing": {
+    "process":          "local",
+    "suggest_rules":    "local",
+    "resolve_enrich":   "local",
+    "resolve_strategy": "claude",
+    "query":            "claude"
+  },
+
+  "embedder": {
+    "model": "BAAI/bge-m3",
+    "dimensions": 1024,
+    "batch_size": 64,
+    "normalize_embeddings": true,
+    "device": "cpu"
+  },
+
+  "change_report": {
+    "enabled": false,
+    "interval": "weekly",
+    "keywords": [],
+    "top_n_new": 10,
+    "instructions": "",
+    "approved_template": null
+  },
+
+  "report": {
+    "format": "table",
+    "language": "ru",
+    "include_links": true,
+    "include_evidence": true,
+    "top_n": 20,
+    "similarity_threshold": 0.5,
+    "columns": ["rank", "rank_score", "intensity", "summary", "url"],
+    "ranking": {
+      "formula": "default",
+      "half_life_days": 7,
+      "w_engagement": 0.3,
+      "w_quality": 0.7
+    },
+    "export": "markdown"
+  }
+}

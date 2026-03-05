@@ -1,0 +1,23 @@
+{
+  "id": "signal-hunter",
+  "name": "Signal Hunter",
+  "description": "Market intelligence: track AI/ML signals on GitHub, Reddit, HN. Semantic search via Qdrant + bge-m3.",
+  "version": "0.1.0",
+  "entry": "src/index.ts",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pythonBin": {
+        "type": "string",
+        "default": "python3",
+        "description": "Path to Python executable"
+      },
+      "skillDir": {
+        "type": ["string", "null"],
+        "default": null,
+        "description": "Absolute path to signal-hunter directory (auto-detected if null)"
+      }
+    }
+  }
+}

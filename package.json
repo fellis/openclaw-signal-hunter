@@ -1,0 +1,23 @@
+{
+  "name": "@openclaw/signal-hunter",
+  "version": "0.1.0",
+  "description": "Signal Hunter plugin for OpenClaw - AI/ML market intelligence via semantic search",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "openclaw": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": ["openclaw", "signal-hunter", "market-intelligence", "semantic-search", "qdrant"],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
