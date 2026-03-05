@@ -600,6 +600,45 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
+    // Set embed schedule
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_set_embed_schedule',
+      description:
+        'Configure embedding schedule: how many signals to vectorize per cron run. ' +
+        'After setting, create/update the embed cron job via cron.update. ' +
+        'Recommended: max_items_per_run=128 every 10 minutes. ' +
+        'Triggers: "настрой расписание эмбеддинга", "сколько эмбедить за раз", ' +
+        '"set embed schedule", "how often to embed", "configure embedding cron", ' +
+        '"embed every 10 minutes", "эмбедить каждые 10 минут".',
+      parameters: {
+        type: 'object',
+        properties: {
+          max_items_per_run: {
+            type: 'number',
+            description:
+              'Max signals to embed per cron run (default 128). ' +
+              '128 items = ~10-15s with bge-m3 service. ' +
+              'Set to 512 to drain large queues faster.',
+          },
+        },
+        required: [],
+      },
+      async execute(_id, params) {
+        const p = params as { max_items_per_run?: number };
+        const json = JSON.stringify({ max_items_per_run: p.max_items_per_run ?? 128 });
+        const result = await runSkillCommand(cfg, 'set_embed_schedule', json);
+        if (!result.success) return text(`Set embed schedule failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        return text(
+          `**Embed schedule configured:**\n` +
+          `max_items_per_run: **${d?.max_items_per_run}**\n\n` +
+          `${d?.note ?? ''}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
     // Generate change report
     // ----------------------------------------------------------------
     {
@@ -651,6 +690,64 @@ export function createTools(cfg: RunnerConfig): Tool[] {
           `**Preview report for "${p.keyword}":**\n\n${String(d?.text ?? '')}\n\n` +
           `Approve this format? Call \`signal_hunter_approve_report_template\` with the template text.`
         );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // Embedder service management
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_embedder_service',
+      description:
+        'Manage the embedder Docker container (bge-m3 always-warm service). ' +
+        'Actions: status - check if running and healthy; start - start container; ' +
+        'stop - stop container; restart - restart container; logs - view recent logs; ' +
+        'build - rebuild Docker image after code changes. ' +
+        'Triggers: "embedder status", "start embedder", "stop embedder", ' +
+        '"restart embedder", "embedder logs", "rebuild embedder", ' +
+        '"статус эмбеддера", "запусти эмбеддер", "логи эмбеддера".',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['status', 'start', 'stop', 'restart', 'logs', 'build'],
+            description: 'Action to perform on the embedder service',
+          },
+          lines: {
+            type: 'number',
+            description: 'Number of log lines to return (only for action=logs, default 50)',
+          },
+        },
+        required: ['action'],
+      },
+      async execute(_id, params) {
+        const p = params as { action: string; lines?: number };
+        const json = JSON.stringify({ action: p.action, lines: p.lines ?? 50 });
+        const result = await runSkillCommand(cfg, 'embedder_service', json);
+        if (!result.success) return text(`Embedder service error: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+
+        if (p.action === 'status') {
+          const running = d?.running as boolean;
+          const health = (d?.health as Record<string, unknown>) ?? {};
+          const icon = running ? '✓' : '✗';
+          const lines = [
+            `${icon} **Embedder service:** ${running ? 'running' : 'down'}`,
+            running ? `Model: ${health.model ?? 'unknown'} | Ready: ${health.ready ?? false}` : `Error: ${health.error ?? 'unreachable'}`,
+            ``,
+            `Docker: ${d?.docker_ps ?? '-'}`,
+          ];
+          return text(lines.join('\n'));
+        }
+
+        if (p.action === 'logs') {
+          return text(`**Embedder logs:**\n\`\`\`\n${d?.logs ?? 'no logs'}\n\`\`\``);
+        }
+
+        const success = d?.success as boolean;
+        const icon = success ? '✓' : '✗';
+        return text(`${icon} **Embedder ${p.action}:** ${success ? 'done' : 'failed'}\n${d?.output ?? ''}`);
       },
     },
 

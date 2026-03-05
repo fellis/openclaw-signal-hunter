@@ -436,6 +436,7 @@ def cmd_set_routing(json_str: str) -> None:
 
 
 _SH_CRON_JOB_ID = "7a3f9b2c-4e1d-4c8a-b5f6-0d2e8a1c9b3f"
+_SH_EMBED_CRON_JOB_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
 
 def cmd_set_process_schedule(json_str: str) -> None:
@@ -476,6 +477,47 @@ def cmd_set_process_schedule(json_str: str) -> None:
             f"{signals_per_batch} signals per batch. "
             f"To change the interval, call cron.update with jobId='{_SH_CRON_JOB_ID}' "
             "and patch.schedule (e.g. {\"kind\": \"cron\", \"expr\": \"*/5 * * * *\"})."
+        ),
+    })
+
+
+def cmd_set_embed_schedule(json_str: str) -> None:
+    """
+    Configure embedding schedule parameters.
+    json_str: '{"max_items_per_run": 128}'
+
+    max_items_per_run: max signals to embed per cron run (default 128).
+      - Each item takes ~50-100ms on CPU with bge-m3 service.
+      - 128 items per run = ~10-15s, safe for any timeout.
+      - Set higher (e.g. 512) to drain the queue faster if many items accumulated.
+
+    The cron interval is managed via OpenClaw's cron.update using the returned cron_job_id.
+    Recommended interval: every 10 minutes (*/10 * * * *).
+    """
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        _err(f"Invalid JSON: {e}")
+        return
+
+    max_items_per_run = data.get("max_items_per_run", 128)
+
+    cm = _make_config_manager()
+    config = cm.load()
+    embedder = config.setdefault("embedder", {})
+    embedder["max_items_per_run"] = max_items_per_run
+    cm.save(config)
+
+    _out({
+        "status": "ok",
+        "max_items_per_run": max_items_per_run,
+        "cron_job_id": _SH_EMBED_CRON_JOB_ID,
+        "note": (
+            f"Config saved: {max_items_per_run} signals per embed run. "
+            f"To create or update the embed cron job, call cron.update with "
+            f"jobId='{_SH_EMBED_CRON_JOB_ID}', message='Run sh_embed to vectorize pending signals.' "
+            f"and patch.schedule (e.g. {{\"kind\": \"cron\", \"expr\": \"*/10 * * * *\"}}). "
+            f"Recommended: */10 * * * * (every 10 min) with max_items_per_run=128."
         ),
     })
 
@@ -676,6 +718,73 @@ def cmd_list_keywords() -> None:
     _out({"keywords": keywords, "total": len(keywords)})
 
 
+def cmd_embedder_service(json_str: str) -> None:
+    """
+    Manage the embedder Docker container.
+    json_str: '{"action": "status|start|stop|restart|logs"}'
+    """
+    import subprocess  # noqa: PLC0415
+
+    data: dict = {}
+    if json_str.strip():
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+    action = data.get("action", "status")
+    compose_dir = str(Path(__file__).parent.parent)
+
+    def _compose(*args: str, timeout: int = 30) -> tuple[str, str, int]:
+        r = subprocess.run(
+            ["docker", "compose", *args],
+            cwd=compose_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return r.stdout.strip(), r.stderr.strip(), r.returncode
+
+    if action == "status":
+        stdout, stderr, _ = _compose("ps", "embedder")
+        health: dict = {}
+        try:
+            import httpx  # noqa: PLC0415
+            config = _load_config()
+            service_url = config.get("embedder", {}).get("service_url", "http://localhost:6335")
+            resp = httpx.get(f"{service_url}/health", timeout=5.0)
+            health = resp.json()
+            running = True
+        except Exception as e:
+            health = {"error": str(e)}
+            running = False
+        _out({"action": "status", "running": running, "health": health, "docker_ps": stdout})
+
+    elif action == "start":
+        stdout, stderr, code = _compose("up", "-d", "embedder", timeout=60)
+        _out({"action": "start", "success": code == 0, "output": stdout or stderr})
+
+    elif action == "stop":
+        stdout, stderr, code = _compose("stop", "embedder")
+        _out({"action": "stop", "success": code == 0, "output": stdout or stderr})
+
+    elif action == "restart":
+        stdout, stderr, code = _compose("restart", "embedder")
+        _out({"action": "restart", "success": code == 0, "output": stdout or stderr})
+
+    elif action == "logs":
+        lines = data.get("lines", 50)
+        stdout, stderr, code = _compose("logs", "--tail", str(lines), "embedder")
+        _out({"action": "logs", "logs": stdout or stderr})
+
+    elif action == "build":
+        stdout, stderr, code = _compose("build", "embedder", timeout=300)
+        _out({"action": "build", "success": code == 0, "output": (stdout + "\n" + stderr).strip()})
+
+    else:
+        _out({"error": f"Unknown action '{action}'. Use: status | start | stop | restart | logs | build"})
+
+
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
@@ -700,12 +809,14 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "list_providers":           (cmd_list_providers, False),
     "set_routing":              (cmd_set_routing, True),
     "set_process_schedule":     (cmd_set_process_schedule, True),
+    "set_embed_schedule":       (cmd_set_embed_schedule, True),
     "suggest_rules":            (cmd_suggest_rules, True),
     "approve_rules":            (cmd_approve_rules, False),
     "generate_change_report":   (cmd_generate_change_report, True),
     "preview_change_report":    (cmd_preview_change_report, True),
     "approve_report_template":  (cmd_approve_report_template, False),
     "list_keywords":            (cmd_list_keywords, False),
+    "embedder_service":         (cmd_embedder_service, True),
 }
 
 

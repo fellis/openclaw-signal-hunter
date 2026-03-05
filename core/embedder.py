@@ -8,6 +8,10 @@ Key validated facts from spike Phase 2:
 - normalize_embeddings=True required for cosine similarity
 - batch_size=64 works stably
 - Model is loaded once and reused (singleton within a process run)
+
+Service mode (preferred):
+- If service_url is set, vectors are fetched from embedder HTTP service (always warm).
+- Fallback to local model load if service is unavailable.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ from __future__ import annotations
 import logging
 from datetime import timezone
 from typing import Any
+
+import numpy as np
 
 from storage.postgres import PostgresStorage
 from storage.vector import VectorStorage
@@ -27,7 +33,10 @@ _MODEL_NAME = "BAAI/bge-m3"
 class Embedder:
     """
     Vectorizes processed signals and upserts them into Qdrant.
-    Model is loaded lazily on first call and kept in memory.
+
+    When service_url is provided, delegates encode calls to the embedder HTTP
+    service (Docker container with bge-m3 always loaded). Falls back to local
+    model loading if the service is unreachable.
     """
 
     def __init__(
@@ -36,21 +45,20 @@ class Embedder:
         vector: VectorStorage,
         batch_size: int = 64,
         device: str = "cpu",
+        service_url: str | None = None,
+        max_items: int = 512,
     ) -> None:
         self._storage = storage
         self._vector = vector
         self._batch_size = batch_size
         self._device = device
+        self._service_url = service_url.rstrip("/") if service_url else None
+        self._max_items = max_items
         self._model = None
 
-    def _get_model(self):
-        """Lazy-load bge-m3. Loaded once per process, never reloaded."""
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-
-            log.info("[embedder] loading model '%s' on device '%s'", _MODEL_NAME, self._device)
-            self._model = SentenceTransformer(_MODEL_NAME, device=self._device)
-        return self._model
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def embed_pending(self) -> int:
         """
@@ -58,14 +66,13 @@ class Embedder:
         Returns number of vectors upserted.
         """
         self._vector.ensure_collection()
-        rows = self._storage.fetch_pending_embeddings(limit=512)
+        rows = self._storage.fetch_pending_embeddings(limit=self._max_items)
 
         if not rows:
             log.info("[embedder] nothing pending")
             return 0
 
         log.info("[embedder] embedding %d pending signals", len(rows))
-        model = self._get_model()
         total_upserted = 0
 
         for batch_start in range(0, len(rows), self._batch_size):
@@ -73,11 +80,7 @@ class Embedder:
             summaries = [r["summary"] for r in batch]
 
             try:
-                vectors = model.encode(
-                    summaries,
-                    normalize_embeddings=True,
-                    show_progress_bar=False,
-                )
+                vectors = self._encode(summaries)
                 points = [
                     {
                         "id": self._to_int_id(batch[i]["raw_signal_id"]),
@@ -108,9 +111,68 @@ class Embedder:
 
     def embed_query(self, query: str) -> list[float]:
         """Embed a search query with the same model used for indexing."""
-        model = self._get_model()
+        if self._service_url:
+            try:
+                return self._encode_query_via_service(query)
+            except Exception as e:
+                log.warning("[embedder] service unavailable for query, falling back to local: %s", e)
+
+        model = self._get_local_model()
         vector = model.encode(query, normalize_embeddings=True, show_progress_bar=False)
         return vector.tolist()
+
+    # ------------------------------------------------------------------
+    # Encoding - service or local
+    # ------------------------------------------------------------------
+
+    def _encode(self, texts: list[str]) -> np.ndarray:
+        """Encode texts via service if configured, otherwise local model."""
+        if self._service_url:
+            try:
+                return self._encode_via_service(texts)
+            except Exception as e:
+                log.warning("[embedder] service unavailable, falling back to local model: %s", e)
+
+        return self._encode_local(texts)
+
+    def _encode_via_service(self, texts: list[str]) -> np.ndarray:
+        """POST texts to embedder HTTP service, return numpy array of vectors."""
+        import httpx  # noqa: PLC0415
+
+        log.info("[embedder] encoding %d texts via service %s", len(texts), self._service_url)
+        resp = httpx.post(
+            f"{self._service_url}/embed",
+            json={"texts": texts, "normalize": True},
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        return np.array(resp.json()["vectors"], dtype=np.float32)
+
+    def _encode_query_via_service(self, text: str) -> list[float]:
+        """POST single query to embedder HTTP service, return vector."""
+        import httpx  # noqa: PLC0415
+
+        resp = httpx.post(
+            f"{self._service_url}/embed-query",
+            json={"text": text, "normalize": True},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["vector"]
+
+    def _encode_local(self, texts: list[str]) -> np.ndarray:
+        """Encode texts using locally loaded model."""
+        model = self._get_local_model()
+        return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+
+    def _get_local_model(self):
+        """Lazy-load bge-m3 locally. Used as fallback when service is unavailable."""
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+
+            log.info("[embedder] loading model '%s' locally on device '%s'", _MODEL_NAME, self._device)
+            self._model = SentenceTransformer(_MODEL_NAME, device=self._device)
+        return self._model
 
     # ------------------------------------------------------------------
     # Private helpers

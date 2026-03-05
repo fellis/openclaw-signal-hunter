@@ -137,11 +137,14 @@ class Orchestrator:
         Returns {total: int}.
         """
         vector = VectorStorage()
+        embedder_cfg = self._config.get("embedder", {})
         embedder = Embedder(
             storage=self._storage,
             vector=vector,
-            batch_size=self._config.get("embedder", {}).get("batch_size", 64),
+            batch_size=embedder_cfg.get("batch_size", 64),
             device=device,
+            service_url=embedder_cfg.get("service_url"),
+            max_items=embedder_cfg.get("max_items_per_run", 512),
         )
         _emit({"status": "running", "phase": "embed"})
         total = embedder.embed_pending()
@@ -157,10 +160,12 @@ class Orchestrator:
         from core.llm_router import LLMCall  # noqa: PLC0415
 
         vector = VectorStorage()
+        embedder_cfg = self._config.get("embedder", {})
         embedder = Embedder(
             storage=self._storage,
             vector=vector,
-            device=self._config.get("embedder", {}).get("device", "cpu"),
+            device=embedder_cfg.get("device", "cpu"),
+            service_url=embedder_cfg.get("service_url"),
         )
 
         threshold = self._config.get("report", {}).get("similarity_threshold", 0.5)

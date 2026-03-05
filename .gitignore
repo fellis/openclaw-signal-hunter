@@ -35,3 +35,7 @@ pgdata/
 
 # Model cache (bge-m3 is large, should not be in repo)
 .cache/
+
+# Runtime config - contains live keywords, rules, credentials. Never overwrite with git pull.
+# Use config.example.json as reference template.
+config.json

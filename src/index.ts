@@ -172,9 +172,30 @@ export default function register(api: PluginApi, configParam?: PluginConfig) {
             return { text: keywords.length ? `Keywords: ${keywords.join(', ')}` : 'No keywords tracked.' };
           }
 
+          case 'embedder': {
+            const action = arg || 'status';
+            const json = JSON.stringify({ action, lines: 50 });
+            const result = await runSkillCommand(runnerConfig, 'embedder_service', json);
+            if (!result.success) return { text: `Embedder error: ${result.error}` };
+            const d = result.data as Record<string, unknown>;
+            if (action === 'status') {
+              const running = d?.running as boolean;
+              const health = (d?.health as Record<string, unknown>) ?? {};
+              return {
+                text: running
+                  ? `✓ Embedder running | model: ${health.model ?? '-'} | ready: ${health.ready ?? false}`
+                  : `✗ Embedder down: ${(health.error as string) ?? 'unreachable'}`,
+              };
+            }
+            if (action === 'logs') {
+              return { text: String(d?.logs ?? 'no logs') };
+            }
+            return { text: `Embedder ${action}: ${(d?.success as boolean) ? 'done' : 'failed'} ${d?.output ?? ''}` };
+          }
+
           default:
             return {
-              text: `Unknown subcommand: ${sub}\nUsage: /sh status | query <text> | collect | process | embed | update | report <kw> | sources | keywords`,
+              text: `Unknown subcommand: ${sub}\nUsage: /sh status | query <text> | collect | process | embed | update | report <kw> | sources | keywords | embedder [status|start|stop|restart|logs|build]`,
             };
         }
       },
