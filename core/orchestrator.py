@@ -52,10 +52,16 @@ class Orchestrator:
 
         by_collector: dict[str, int] = {}
 
+        sources_cfg = self._config.get("sources", {})
+
         for plan_row in plans:
             collector_name = plan_row["collector_name"]
             canonical_name = plan_row["canonical_name"]
             plan_data = plan_row["plan_data"]
+
+            if not sources_cfg.get(collector_name, {}).get("enabled", True):
+                log.info("[orchestrator] skipping disabled source: %s", collector_name)
+                continue
 
             collector_cls = get(collector_name)
             if not collector_cls:
