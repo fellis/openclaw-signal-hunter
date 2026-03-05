@@ -113,7 +113,7 @@ class LLMRouter:
             cfg = self._providers_cfg.get("claude", {})
             api_key = self._resolve_env(cfg.get("api_key", "${ANTHROPIC_API_KEY}"))
             self._anthropic_client = anthropic.Anthropic(api_key=api_key)
-            self._claude_model = cfg.get("model", "claude-sonnet-4-5")
+            self._claude_model = cfg.get("model", "claude-haiku-4-5-20251001")
 
         system_msg = next(
             (m["content"] for m in call.messages if m["role"] == "system"), None
