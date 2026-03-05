@@ -132,7 +132,7 @@ class KeywordResolver:
                 {"role": "system", "content": _ENRICH_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=2048,
+            max_tokens=512,
             temperature=0.0,
         )
 

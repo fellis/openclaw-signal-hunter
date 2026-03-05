@@ -143,8 +143,9 @@ class LLMRouter:
     # ------------------------------------------------------------------
 
     def _call_local(self, call: LLMCall) -> str:
+        import time  # noqa: PLC0415
         import httpx  # noqa: PLC0415
-        from openai import OpenAI  # noqa: PLC0415
+        from openai import OpenAI, InternalServerError  # noqa: PLC0415
 
         if self._openai_client is None:
             base_url = os.environ.get("LOCAL_LLM_BASE_URL")
@@ -163,12 +164,34 @@ class LLMRouter:
             )
             self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
 
-        response = self._openai_client.chat.completions.create(
-            model=self._local_model,
-            messages=call.messages,
-            temperature=call.temperature,
-            max_tokens=call.max_tokens,
-        )
+        # Retry on 500 (vLLM KV cache exhausted while cron occupies GPU)
+        max_retries = 3
+        retry_delay = 15.0
+        last_exc: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                response = self._openai_client.chat.completions.create(
+                    model=self._local_model,
+                    messages=call.messages,
+                    temperature=call.temperature,
+                    max_tokens=call.max_tokens,
+                )
+                break
+            except InternalServerError as e:
+                last_exc = e
+                if attempt < max_retries - 1:
+                    log.warning(
+                        "[llm_router] local LLM returned 500 (attempt %d/%d), "
+                        "retrying in %.0fs (likely KV cache busy)...",
+                        attempt + 1, max_retries, retry_delay,
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.5
+                else:
+                    raise
+        else:
+            raise last_exc  # type: ignore[misc]
+
         text = response.choices[0].message.content.strip()
 
         usage = response.usage
