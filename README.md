@@ -12,7 +12,7 @@ You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested relevant subreddits
 3. **Collects incrementally** (GitHub issues, HF discussions, HN threads, SO questions, Reddit posts) using cursors
 4. **Classifies** every signal with a local LLM using your extraction rules (pain points, feature requests, comparisons, adoption...)
-5. **Embeds** relevant signals into Qdrant with `bge-m3`
+5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
 7. **Generates change reports** - weekly/monthly deltas with what's new and what grew
 
@@ -29,9 +29,10 @@ Everything runs on a VPS, fully offline (except for API calls to data sources an
 | **PostgreSQL 16** | Structured storage: signals, profiles, cursors, LLM cost log |
 | **Qdrant** | Vector search (cosine, 1024 dims) |
 | **BAAI/bge-m3** | Cross-lingual embeddings via `sentence-transformers` |
+| **Embedder service** | FastAPI Docker container - bge-m3 loaded once, serves HTTP /embed |
 | **Local LLM** | Classification, rule suggestions (OpenAI-compatible endpoint) |
 | **Claude (Anthropic)** | Queries, resolution strategy (configurable) |
-| **Docker Compose** | PostgreSQL + Qdrant services |
+| **Docker Compose** | PostgreSQL + Qdrant + Embedder service |
 
 ---
 
@@ -42,16 +43,16 @@ OpenClaw chat
      │
      ▼
 src/index.ts          ← OpenClaw plugin entry (register tools + /sh command)
-src/tools.ts          ← 22 tool definitions (thin TS wrappers)
+src/tools.ts          ← 25 tool definitions (thin TS wrappers)
 src/runner.ts         ← spawns: python -m skill <command> [args]
      │
      ▼  JSON via stdout
-skill/main.py         ← CLI dispatcher (22 commands)
+skill/main.py         ← CLI dispatcher (25 commands)
      │
      ├── core/resolver.py      ← keyword discovery + LLM enrichment
      ├── core/orchestrator.py  ← collect → process → embed pipeline
      ├── core/processor.py     ← LLM classification (token-aware batching)
-     ├── core/embedder.py      ← bge-m3 → Qdrant (Outbox pattern)
+     ├── core/embedder.py      ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py    ← routes ops to local/Claude by config
      │
      ├── collectors/
@@ -65,22 +66,31 @@ skill/main.py         ← CLI dispatcher (22 commands)
          ├── postgres.py       ← all SQL (raw_signals, processed_signals, cursors...)
          ├── vector.py         ← Qdrant wrapper
          └── config_manager.py ← atomic config.json writes (temp file + rename)
+
+Docker Compose services:
+     ├── postgres:5433         ← PostgreSQL 16
+     ├── qdrant:6333           ← Qdrant vector DB
+     └── embedder:6335         ← FastAPI + bge-m3 (always warm, restart: unless-stopped)
+           embedder_service.py ← /embed (batch) + /embed-query + /health
 ```
 
 **Design principles:**
 - Each collector is a self-contained module implementing `BaseCollector`
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
-- Token-aware batching for LLM classification (validated: ~20K tokens per batch)
+- Token-aware batching for LLM classification (validated: ~10 signals per batch, nginx-safe)
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
+- Embedder runs as a persistent Docker service: model loads once at startup, all encode calls go via HTTP - no per-run model reload overhead
 - Anti-hallucination gate on query answers: URLs not in source data are stripped
+- `config.json` is excluded from git - live rules and credentials survive `git pull`
+- flock-based process lock prevents parallel cron runs from duplicating work
 
 ---
 
 ## Prerequisites
 
 - VPS or local machine with Python 3.11+
-- Docker + Docker Compose (for PostgreSQL and Qdrant)
+- Docker + Docker Compose (for PostgreSQL, Qdrant, and the Embedder service)
 - [OpenClaw](https://github.com/openclaw) installed
 - Local LLM with OpenAI-compatible API (e.g. [Ollama](https://ollama.com) with Devstral, Mistral, etc.)
 - Anthropic API key (for queries and keyword resolution strategy)
@@ -129,21 +139,41 @@ LOCAL_LLM_MODEL=devstral
 ANTHROPIC_API_KEY=sk-ant-your_key_here
 ```
 
-### 3. Start infrastructure
+### 3. Create config.json
+
+`config.json` is excluded from git (contains live rules and credentials). Copy the example:
+
+```bash
+cp config.example.json config.json
+```
+
+> **Important:** never `git pull` without knowing that `config.json` won't be touched. It's in `.gitignore` - safe to pull.
+
+### 4. Start infrastructure
 
 ```bash
 docker compose up -d
 ```
 
-This starts PostgreSQL 16 (port 5433) and Qdrant (port 6333). The schema is applied automatically on first start.
+This starts three services:
+- **PostgreSQL 16** (port 5433) - schema applied automatically on first start
+- **Qdrant** (port 6333) - vector storage, data persisted in `qdrantdata` volume
+- **Embedder** (port 6335) - FastAPI + bge-m3; downloads model on first start (~570MB, cached in `hf_cache` volume)
 
-### 4. Install Python dependencies
+Check embedder is ready:
+
+```bash
+curl http://localhost:6335/health
+# {"status":"ok","model":"BAAI/bge-m3","ready":true}
+```
+
+### 5. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Register the plugin in OpenClaw
+### 6. Register the plugin in OpenClaw
 
 Add to your `~/.openclaw/openclaw.json` under `plugins`:
 
@@ -158,7 +188,7 @@ Add to your `~/.openclaw/openclaw.json` under `plugins`:
 }
 ```
 
-Reload OpenClaw. The plugin registers 22 tools and the `/sh` slash command.
+Reload OpenClaw. The plugin registers 25 tools and the `/sh` slash command.
 
 ---
 
@@ -192,19 +222,6 @@ ClawBot:
 2. Click "Generate new token (classic)"
 3. Name: signal-hunter, Scopes: public_repo
 4. Copy the token and type: set credentials github {"api_token": "ghp_xxx"}
-```
-
-```
-You: how do I set up Hugging Face?
-```
-
-```
-ClawBot:
-Works without a token for public content.
-For higher rate limits:
-1. Go to https://huggingface.co/settings/tokens
-2. Click "New token", Role: read
-3. set credentials huggingface {"api_token": "hf_xxx"}
 ```
 
 ---
@@ -313,26 +330,21 @@ Suggested extraction_rules for "RAG" (from 1001 real posts):
 
 2. chunking_strategy (priority 4)
    Questions and pain around document splitting strategies
-   Real examples: "what's the optimal chunk size for technical docs?"
-                  "sliding window chunking loses context between chunks"
 
 3. embedding_model_choice (priority 4)
    Comparisons and selection of embedding models
-   Real examples: "OpenAI ada vs bge-m3 for multilingual RAG"
 
 4. reranking (priority 3)
    Requests and pain around the reranking step
-   Real examples: "cohere reranker doubles cost but worth it?"
 
 5. evaluation_difficulty (priority 3)
    Difficulty evaluating RAG pipeline quality
-   Real examples: "how do you even measure RAG quality without ground truth?"
 
 Approve all?
 ```
 
 ```
-You: approve, but rename evaluation_difficulty to rag_eval
+You: approve
 ```
 
 ```
@@ -341,25 +353,25 @@ ClawBot: ✓ 5 rules saved to config.json
 
 ---
 
-### Step 6 - Process (LLM classification)
+### Step 6 - Process and embed
 
 ```
 You: process
 ```
 
 ```
-ClawBot: Classifying 2294 signals with local LLM... (token-aware batching, ~20K tokens/batch)
-✓ Done. 1847 classified (relevant: 934, irrelevant: 913)
+ClawBot: Classifying 1688 signals with local LLM... (10 signals/batch, token-aware)
+✓ Done. 1453 classified (relevant: 734, irrelevant: 719)
 ```
 
-Then embed for semantic search:
+Embedding happens automatically via the cron job (every 10 minutes). To run immediately:
 
 ```
 You: embed
 ```
 
 ```
-ClawBot: ✓ 934 vectors indexed into Qdrant (bge-m3, 1024 dims)
+ClawBot: ✓ 734 vectors indexed into Qdrant (bge-m3, 1024 dims)
 ```
 
 ---
@@ -370,22 +382,22 @@ ClawBot: ✓ 934 vectors indexed into Qdrant (bge-m3, 1024 dims)
 You: what are the top pain points with RAG retrieval this month?
 ```
 
-Signal Hunter embeds the question, searches Qdrant for the most similar signals, re-ranks by `rank_score` (engagement + quality + time decay), then uses Claude to synthesize:
+Signal Hunter embeds the question via the embedder service, searches Qdrant for the most similar signals, re-ranks by `rank_score` (engagement + quality + time decay), then uses Claude to synthesize:
 
 ```
 ClawBot:
 Top RAG retrieval pain points (from 23 signals, last 30 days):
 
 1. **Context dilution with large chunks** (14 signals)
-   Developers report that chunks over 512 tokens cause the LLM to lose focus on the relevant part.
+   Developers report that chunks over 512 tokens cause the LLM to lose focus.
    Source: https://github.com/langchain-ai/langchain/issues/12847
 
 2. **Reranking latency in production** (9 signals)
-   Cross-encoder rerankers add 300-800ms per query - too slow for real-time applications.
+   Cross-encoder rerankers add 300-800ms per query - too slow for real-time.
    Source: https://reddit.com/r/LocalLLaMA/comments/...
 
 3. **Multilingual retrieval degradation** (7 signals)
-   When source documents are in mixed languages, recall drops by ~40% with English-only embeddings.
+   When source documents are in mixed languages, recall drops ~40% with English-only embeddings.
    Source: https://stackoverflow.com/q/...
 ```
 
@@ -421,26 +433,35 @@ To customize the report format:
 
 ```
 You: show me how the report would look in table format
-```
-
-After previewing, approve the format:
-
-```
 You: this looks good, save this as the report template for ollama
 ```
 
 ---
 
-### Step 9 - Full cycle (scheduled)
+### Step 9 - Automation (cron)
 
-For daily/weekly automation, run the full pipeline in one command:
+For continuous background operation, configure two cron jobs via OpenClaw:
 
+**Processing (classify new signals):**
+```
+You: set process schedule - 3 batches per run
+```
+Then via `cron.update` with `expr: "*/2 * * * *"` - runs every 2 minutes, processes 3 × 10 = 30 signals per run.
+
+**Embedding (vectorize classified signals):**
+```
+You: set embed schedule - 128 items per run
+```
+Then via `cron.update` with `expr: "*/10 * * * *"` - runs every 10 minutes, embeds up to 128 signals per run.
+
+Both cron jobs run silently (`delivery.mode: none`) - no Telegram noise.
+
+**Full cycle (manual or less frequent):**
 ```
 You: /sh update
 ```
 
-Or via CLI directly:
-
+Or via CLI:
 ```bash
 cd /path/to/signal-hunter
 python -m skill full_cycle
@@ -448,11 +469,38 @@ python -m skill full_cycle
 
 ---
 
+### Step 10 - Manage the embedder service
+
+The embedder runs as a Docker container. Manage it from chat:
+
+```
+You: embedder status
+```
+
+```
+ClawBot:
+✓ Embedder service: running
+Model: BAAI/bge-m3 | Ready: true
+
+Docker: signal-hunter-embedder-1  Up 2 hours (healthy)
+```
+
+Other actions:
+```
+You: restart embedder      → restarts the container
+You: embedder logs         → last 50 lines of logs
+You: rebuild embedder      → rebuilds Docker image (after code changes)
+```
+
+Or via slash command: `/sh embedder [status|start|stop|restart|logs|build]`
+
+---
+
 ## All available commands
 
 | Command | Description |
 |---|---|
-| `status` | System stats: signal counts, embed queue, monthly LLM cost |
+| `status` | System stats: signal counts, embed queue, monthly LLM cost, processor config |
 | `check_sources` | API readiness and rate limits for all sources |
 | `get_setup_guide <source>` | Step-by-step credential instructions |
 | `set_credentials <json>` | Save API credentials to config |
@@ -468,6 +516,9 @@ python -m skill full_cycle
 | `reprocess <json>` | Delete and reclassify signals for a keyword |
 | `suggest_rules <keyword>` | Analyze real posts, suggest extraction rules |
 | `approve_rules <json>` | Save approved rules to config |
+| `set_process_schedule <json>` | Configure batches per run and signals per batch for cron |
+| `set_embed_schedule <json>` | Configure max items per embed cron run |
+| `embedder_service <json>` | Manage embedder Docker container (status/start/stop/restart/logs/build) |
 | `query <prompt>` | Semantic search + LLM synthesis |
 | `generate_change_report <keyword>` | Delta report since last snapshot |
 | `preview_change_report <json>` | Sample report using custom format instructions |
@@ -481,7 +532,9 @@ All commands are also available as OpenClaw tools (prefix `signal_hunter_`) and 
 
 ## Configuration
 
-`config.json` stores all settings. Key sections:
+`config.json` stores all runtime settings. It is **excluded from git** - `git pull` never overwrites it. Use `config.example.json` as the reference template for a fresh install.
+
+Key sections:
 
 ```json
 {
@@ -495,7 +548,18 @@ All commands are also available as OpenClaw tools (prefix `signal_hunter_`) and 
   },
   "extraction_rules": [],
   "processor": {
-    "max_tokens_per_batch": 20000
+    "max_signals_per_batch": 10,
+    "max_batches_per_run": 3,
+    "max_tokens_per_batch": 20000,
+    "max_body_chars": 1000
+  },
+  "embedder": {
+    "model": "BAAI/bge-m3",
+    "dimensions": 1024,
+    "batch_size": 64,
+    "device": "cpu",
+    "service_url": "http://localhost:6335",
+    "max_items_per_run": 128
   },
   "llm_routing": {
     "process":          "local",
@@ -503,11 +567,6 @@ All commands are also available as OpenClaw tools (prefix `signal_hunter_`) and 
     "resolve_enrich":   "local",
     "resolve_strategy": "claude",
     "query":            "claude"
-  },
-  "embedder": {
-    "model": "BAAI/bge-m3",
-    "dimensions": 1024,
-    "device": "cpu"
   },
   "change_report": {
     "top_n_new": 10,
@@ -522,9 +581,34 @@ All commands are also available as OpenClaw tools (prefix `signal_hunter_`) and 
 }
 ```
 
+**`processor` limits explained:**
+- `max_signals_per_batch: 10` - signals per LLM call. At ~37 tok/s with 200 output tokens/signal: 10 × 200 = ~54s. Safe under a 60s nginx timeout. Increase only after raising `proxy_read_timeout`.
+- `max_batches_per_run: 3` - LLM batches per cron execution. Controls how much work one cron run does (3 × 10 = 30 signals/run).
+- `max_tokens_per_batch: 20000` - input token budget per LLM batch (body truncated via `max_body_chars`).
+
+**`embedder` settings explained:**
+- `service_url` - HTTP endpoint of the embedder Docker container. If unreachable, falls back to loading bge-m3 locally.
+- `max_items_per_run: 128` - signals to embed per cron run. At ~100ms/signal with the service: 128 × 100ms ≈ 13s per run.
+
 All writes to `config.json` are atomic (temp file + fsync + rename) - safe for concurrent processes.
 
 Sensitive values (API keys, DB passwords) live only in `.env` and are never written to `config.json`.
+
+---
+
+## Embedder service
+
+The embedder is a separate FastAPI Docker container (`embedder_service.py`) that keeps `bge-m3` loaded in memory permanently. This eliminates the 10-30s model load overhead that would otherwise occur on every `sh_embed` or `sh_query` call.
+
+```
+POST /embed        {"texts": [...], "normalize": true}  → {"vectors": [[...]]}
+POST /embed-query  {"text": "...", "normalize": true}   → {"vector": [...]}
+GET  /health                                            → {"status": "ok", "ready": true}
+```
+
+The `Embedder` class in `core/embedder.py` calls the service via HTTP when `service_url` is configured, and falls back to loading the model locally if the service is down.
+
+The model is cached in the `hf_cache` Docker volume - not re-downloaded on container restart.
 
 ---
 
@@ -553,6 +637,15 @@ rank_score = (0.3 * log10(1 + engagement) + 0.7 * (intensity/5) * confidence)
 ```
 
 Weights: engagement 30%, quality (intensity × confidence) 70%, half-life 7 days.
+
+---
+
+## Known limitations
+
+| Issue | Status | Workaround |
+|---|---|---|
+| nginx `proxy_read_timeout 60s` causes 504 on large LLM batches | Partial | `max_signals_per_batch=10` keeps each call under 54s |
+| Full nginx fix requires SSH to internal proxy server | Pending | Raise `proxy_read_timeout 300s` on internal nginx when access available |
 
 ---
 
