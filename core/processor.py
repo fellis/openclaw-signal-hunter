@@ -60,19 +60,39 @@ class Processor:
                     "[processor] batch %d/%d (%d signals)",
                     i + 1, len(batches), len(token_batch),
                 )
-                try:
-                    results = self._classify_batch(token_batch)
-                    id_to_raw = {str(s["id"]): s for s in token_batch}
-                    for result in results:
-                        ps = self._build_processed_signal(result, id_to_raw)
-                        if ps:
-                            self._storage.upsert_processed_signal(ps)
-                    total += len(token_batch)
-                except Exception as e:
-                    log.error("[processor] batch %d failed: %s", i + 1, e)
+                total += self._process_with_retry(token_batch)
 
         log.info("[processor] done. total processed: %d", total)
         return total
+
+    def _process_with_retry(self, batch: list[dict[str, Any]], depth: int = 0) -> int:
+        """
+        Classify a batch. On failure, split in half and retry each chunk.
+        Stops splitting when batch reaches a single signal (depth limit).
+        Returns count of successfully classified signals.
+        """
+        if not batch:
+            return 0
+        try:
+            results = self._classify_batch(batch)
+            id_to_raw = {str(s["id"]): s for s in batch}
+            for result in results:
+                ps = self._build_processed_signal(result, id_to_raw)
+                if ps:
+                    self._storage.upsert_processed_signal(ps)
+            return len(batch)
+        except Exception as e:
+            if len(batch) == 1 or depth >= 3:
+                log.error("[processor] signal %s failed permanently: %s", batch[0].get("id"), e)
+                return 0
+            log.warning(
+                "[processor] batch of %d failed (%s), splitting in half (depth=%d)",
+                len(batch), type(e).__name__, depth,
+            )
+            mid = len(batch) // 2
+            left = self._process_with_retry(batch[:mid], depth + 1)
+            right = self._process_with_retry(batch[mid:], depth + 1)
+            return left + right
 
     # ------------------------------------------------------------------
     # Private: batching
