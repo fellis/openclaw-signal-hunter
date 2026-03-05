@@ -1,6 +1,6 @@
 """
 LLM Task Queue Worker.
-Processes one task at a time from llm_task_queue.
+Processes tasks from llm_task_queue sequentially, one at a time.
 Called by cron via skill command 'run_worker'.
 
 Task types:
@@ -12,11 +12,13 @@ Worker guarantees:
   - Auto-enqueues process_batch when unprocessed signals exist
   - Retries failed tasks up to 3 times before marking as 'failed'
   - Resets tasks stuck in 'running' for > 10 minutes
+  - Loops within one cron tick until time budget is exhausted
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from storage.postgres import PostgresStorage
@@ -24,70 +26,91 @@ from storage.postgres import PostgresStorage
 log = logging.getLogger(__name__)
 
 _MAX_STUCK_MINUTES = 10
+_DEFAULT_BUDGET_SECONDS = 50  # leave 10s buffer before next cron tick
 
 
 class LLMWorker:
     """
-    Single-task LLM queue processor.
+    Sequential LLM queue processor with time-budget loop.
     Instantiated and called once per cron tick via cmd_run_worker.
+    Processes as many tasks as possible within the time budget.
     """
 
     def __init__(self, config: dict[str, Any], storage: PostgresStorage) -> None:
         self._config = config
         self._storage = storage
 
-    def run_once(self) -> dict[str, Any]:
+    def run_loop(self, budget_seconds: int = _DEFAULT_BUDGET_SECONDS) -> dict[str, Any]:
         """
-        Execute the next pending LLM task.
-        Returns a status dict reported back to the bot via stdout.
+        Process tasks in a loop until queue is empty or time budget is exhausted.
+        Returns summary of all processed tasks.
         """
-        # Recover tasks that got stuck (e.g. previous worker crashed)
+        deadline = time.monotonic() + budget_seconds
+        processed = []
+        errors = []
+
+        # Recover stuck tasks once per loop invocation
         reset = self._storage.reset_stuck_llm_tasks(_MAX_STUCK_MINUTES)
         if reset:
             log.warning("[llm_worker] reset %d stuck task(s)", reset)
 
-        # Skip if a task is already running (previous cron tick still working)
-        if self._storage.has_running_llm_task():
-            return {"status": "busy", "note": "Another LLM task is still running, skipping."}
+        while time.monotonic() < deadline:
+            # Skip if another task is already running (shouldn't happen in loop, but safety check)
+            if self._storage.has_running_llm_task():
+                log.warning("[llm_worker] unexpected running task, stopping loop")
+                break
 
-        # Auto-enqueue one process_batch when signals need classification
-        if (
-            not self._storage.has_pending_process_batch()
-            and self._storage.count_unprocessed() > 0
-        ):
-            self._storage.enqueue_llm_task(
-                task_type="process_batch",
-                priority=90,
-                payload={},
-            )
+            # Auto-enqueue process_batch when signals need classification
+            if (
+                not self._storage.has_pending_process_batch()
+                and self._storage.count_unprocessed() > 0
+            ):
+                self._storage.enqueue_llm_task(
+                    task_type="process_batch",
+                    priority=90,
+                    payload={},
+                )
 
-        # Claim the highest-priority pending task
-        task = self._storage.claim_next_llm_task()
-        if not task:
+            task = self._storage.claim_next_llm_task()
+            if not task:
+                break  # queue empty
+
+            task_id = task["id"]
+            task_type = task["task_type"]
+            payload = task["payload"]
+
+            log.info("[llm_worker] starting task_id=%s type=%s payload=%s", task_id, task_type, payload)
+
+            try:
+                if task_type == "resolve":
+                    result = self._handle_resolve(payload)
+                elif task_type == "process_batch":
+                    result = self._handle_process_batch()
+                else:
+                    raise ValueError(f"Unknown task_type: {task_type!r}")
+
+                self._storage.complete_llm_task(task_id)
+                log.info("[llm_worker] done task_id=%s type=%s", task_id, task_type)
+                processed.append({"task_type": task_type, **result})
+
+            except Exception as e:
+                log.exception("[llm_worker] failed task_id=%s type=%s: %s", task_id, task_type, e)
+                self._storage.fail_llm_task(task_id, str(e))
+                errors.append({"task_type": task_type, "error": str(e)})
+
+        remaining = self._storage.get_llm_queue_status()
+        pending_count = sum(1 for t in remaining if t["status"] == "pending")
+
+        if not processed and not errors:
             return {"status": "idle", "note": "LLM queue is empty."}
 
-        task_id = task["id"]
-        task_type = task["task_type"]
-        payload = task["payload"]
-
-        log.info("[llm_worker] starting task_id=%s type=%s payload=%s", task_id, task_type, payload)
-
-        try:
-            if task_type == "resolve":
-                result = self._handle_resolve(payload)
-            elif task_type == "process_batch":
-                result = self._handle_process_batch()
-            else:
-                raise ValueError(f"Unknown task_type: {task_type!r}")
-
-            self._storage.complete_llm_task(task_id)
-            log.info("[llm_worker] done task_id=%s type=%s", task_id, task_type)
-            return {"status": "done", "task_type": task_type, **result}
-
-        except Exception as e:
-            log.exception("[llm_worker] failed task_id=%s type=%s: %s", task_id, task_type, e)
-            self._storage.fail_llm_task(task_id, str(e))
-            return {"status": "failed", "task_type": task_type, "error": str(e)}
+        return {
+            "status": "done",
+            "processed": len(processed),
+            "errors": len(errors),
+            "pending_remaining": pending_count,
+            "tasks": processed,
+        }
 
     # ------------------------------------------------------------------
     # Task handlers

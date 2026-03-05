@@ -556,6 +556,30 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
+    // LLM Worker - run worker (called by cron)
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_run_worker',
+      description:
+        'Process the next pending task from the LLM queue (resolve or process_batch). ' +
+        'Called automatically by the worker cron every minute. ' +
+        'Picks the highest-priority pending task, executes it, and reports the result. ' +
+        'If queue is empty or another task is already running, exits immediately. ' +
+        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_worker". ' +
+        'User triggers: "запусти воркер", "run worker", "обработай следующую задачу из очереди".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'run_worker');
+        if (!result.success) return text(`Worker failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        if (d?.status === 'idle') return text(`Worker: queue is empty or task already running.`);
+        return text(
+          `**Worker done:** ${d?.task_type ?? '?'} - ${d?.keyword ?? d?.status ?? 'ok'}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
     // LLM Worker - queue status
     // ----------------------------------------------------------------
     {
@@ -629,6 +653,63 @@ export function createTools(cfg: RunnerConfig): Tool[] {
           `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
           `${d?.note ?? ''}`
         );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // Delete keywords
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_delete_keywords',
+      description:
+        'Delete one or more keywords from the system (removes profile, collection plans, report snapshots). ' +
+        'IMPORTANT - ALWAYS follow this confirmation workflow before setting confirmed=true: ' +
+        '1) Call with confirmed=false to get a preview of what will be deleted. ' +
+        '2) Show the user the full list of keywords that WILL be deleted. ' +
+        '3) Ask the user explicitly: "Подтверди удаление X ключевиков: [список]. Это действие необратимо." ' +
+        '4) Only after the user explicitly confirms - call again with confirmed=true. ' +
+        'Triggers: "удали ключевик", "удали все кроме X", "remove keyword", ' +
+        '"delete keywords", "убери из отслеживания", "удали из системы".',
+      parameters: {
+        type: 'object',
+        properties: {
+          keywords: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of canonical keyword names to delete',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'Must be true to actually delete. Use false first to get a preview.',
+          },
+        },
+        required: ['keywords', 'confirmed'],
+      },
+      async execute(_id, params) {
+        const p = params as { keywords: string[]; confirmed: boolean };
+        const json = JSON.stringify({ keywords: p.keywords, confirmed: p.confirmed });
+        const result = await runSkillCommand(cfg, 'delete_keywords', json);
+        if (!result.success) return text(`Delete keywords failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        if (d?.status === 'preview') {
+          const willDelete = (d.will_delete as string[]) ?? [];
+          const notFound = (d.not_found as string[]) ?? [];
+          const lines = [
+            `**Preview - nothing deleted yet.**`,
+            `Will delete **${d.count}** keyword(s):`,
+            ...willDelete.map(k => `- ${k}`),
+          ];
+          if (notFound.length) {
+            lines.push(`\nNot found (skipped): ${notFound.join(', ')}`);
+          }
+          lines.push(`\nЭто действие необратимо. Подтверди удаление?`);
+          return text(lines.join('\n'));
+        }
+        const keywords = (d?.keywords as string[]) ?? [];
+        const notFound = (d?.not_found as string[]) ?? [];
+        const lines = [`**Deleted ${d?.deleted} keyword(s):**`, ...keywords.map(k => `- ${k}`)];
+        if (notFound.length) lines.push(`\nNot found: ${notFound.join(', ')}`);
+        return text(lines.join('\n'));
       },
     },
 

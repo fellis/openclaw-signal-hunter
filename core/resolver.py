@@ -136,14 +136,14 @@ class KeywordResolver:
             temperature=0.0,
         )
 
+        raw = self._router.complete(call)  # let LLM errors propagate for worker retry
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         try:
-            raw = self._router.complete(call)
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             enriched = json.loads(raw)
-        except Exception as e:
-            log.warning("[resolver] LLM enrichment failed: %s. Using defaults.", e)
+        except json.JSONDecodeError as e:
+            log.warning("[resolver] LLM returned invalid JSON: %s. Using defaults.", e)
             enriched = {}
 
         keyword_type = KeywordType(enriched.get("keyword_type", "product"))

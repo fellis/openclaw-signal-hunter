@@ -444,6 +444,26 @@ class PostgresStorage:
                 cur.execute("SELECT canonical_name FROM keyword_profiles ORDER BY canonical_name")
                 return [row["canonical_name"] for row in cur.fetchall()]
 
+    def delete_keywords(self, canonical_names: list[str]) -> int:
+        """Delete keyword profiles and their collection plans. Returns count deleted."""
+        if not canonical_names:
+            return 0
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "DELETE FROM keyword_collection_plans WHERE canonical_name = ANY(%s)",
+                    (canonical_names,),
+                )
+                cur.execute(
+                    "DELETE FROM change_report_snapshots WHERE keyword = ANY(%s)",
+                    (canonical_names,),
+                )
+                cur.execute(
+                    "DELETE FROM keyword_profiles WHERE canonical_name = ANY(%s)",
+                    (canonical_names,),
+                )
+                return cur.rowcount
+
     # ------------------------------------------------------------------
     # Collection plans
     # ------------------------------------------------------------------
