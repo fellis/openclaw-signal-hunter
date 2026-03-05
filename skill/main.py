@@ -388,53 +388,40 @@ def cmd_set_routing(json_str: str) -> None:
           "message": f"llm_routing.{operation} → {provider}"})
 
 
+_SH_CRON_JOB_ID = "7a3f9b2c-4e1d-4c8a-b5f6-0d2e8a1c9b3f"
+
+
 def cmd_set_process_schedule(json_str: str) -> None:
     """
-    Configure scheduled processing: how many batches per run and cron interval.
-    json_str: '{"batches_per_run": 1, "cron": "*/5 * * * *"}'
-    batches_per_run: null = process all; int = process N batches per cron run
-    cron: standard cron expression (e.g. "*/5 * * * *" = every 5 min)
-          Use null or "" to disable cron (manual only).
-    """
-    import subprocess  # noqa: PLC0415
+    Configure scheduled processing: batches per cron run.
+    json_str: '{"batches_per_run": 3}'
+    batches_per_run: null = process all signals; int = N batches per cron run (default 3)
 
+    The cron interval itself is managed by OpenClaw's native cron.update tool using
+    the returned cron_job_id. This command only updates config.json.
+    """
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
         _err(f"Invalid JSON: {e}")
         return
 
-    batches_per_run = data.get("batches_per_run")
-    cron_expr = data.get("cron", "").strip()
+    batches_per_run = data.get("batches_per_run", 3)
 
     cm = _make_config_manager()
     config = cm.load()
     config.setdefault("processor", {})["max_batches_per_run"] = batches_per_run
     cm.save(config)
 
-    skill_dir = str(Path(__file__).parent.parent)
-    python_bin = str(Path(skill_dir) / ".venv" / "bin" / "python")
-    cron_cmd = f"{python_bin} -m skill process >> /var/log/signal-hunter-process.log 2>&1"
-    cron_line = f"{cron_expr} cd {skill_dir} && {cron_cmd}" if cron_expr else None
-
-    # Read current crontab, remove old signal-hunter-process lines, add new one
-    try:
-        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-        existing = result.stdout if result.returncode == 0 else ""
-        lines = [l for l in existing.splitlines() if "skill process" not in l]
-        if cron_line:
-            lines.append(cron_line)
-        new_crontab = "\n".join(lines) + "\n"
-        subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)
-        cron_status = f"set: {cron_expr}" if cron_line else "disabled"
-    except Exception as e:
-        cron_status = f"cron update failed: {e}"
-
     _out({
         "status": "ok",
         "batches_per_run": batches_per_run,
-        "cron": cron_status,
-        "note": "null batches_per_run means process all signals per run",
+        "cron_job_id": _SH_CRON_JOB_ID,
+        "note": (
+            f"Config saved: {batches_per_run} batch(es) per cron run. "
+            f"To change the interval, call cron.update with jobId='{_SH_CRON_JOB_ID}' "
+            "and patch.schedule (e.g. {\"kind\": \"cron\", \"expr\": \"*/5 * * * *\"})."
+        ),
     })
 
 

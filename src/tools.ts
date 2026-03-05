@@ -545,29 +545,28 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_set_process_schedule',
       description:
-        'Configure scheduled LLM processing: how many batches per run and cron interval. ' +
-        'Triggers: "process 1 batch every 5 minutes", "set process schedule", ' +
-        '"process automatically every 10 min", "disable auto processing".',
+        'Configure how many LLM batches to process per scheduled cron run. ' +
+        'Default: 3 batches per run, running every 5 min via OpenClaw cron. ' +
+        'Returns cron_job_id so you can then call cron.update to change the interval. ' +
+        'Triggers: "обработай 3 батча каждые 5 минут", "set batches to 5", ' +
+        '"change auto-processing schedule", "how many batches are processed automatically". ' +
+        'WORKFLOW: 1) call this tool with batches_per_run, ' +
+        '2) then call cron.update with the returned cron_job_id to change the cron interval.',
       parameters: {
         type: 'object',
         properties: {
           batches_per_run: {
             type: 'number',
-            description: 'Number of LLM batches per cron run. null = process all at once.',
-          },
-          cron: {
-            type: 'string',
-            description: 'Cron expression e.g. "*/5 * * * *" = every 5 min. Empty to disable.',
+            description:
+              'Number of LLM batches per cron run (default 3). ' +
+              'Each batch is ~10k tokens of signals. null = process all unprocessed signals per run.',
           },
         },
         required: [],
       },
       async execute(_id, params) {
-        const p = params as { batches_per_run?: number; cron?: string };
-        const json = JSON.stringify({
-          batches_per_run: p.batches_per_run ?? null,
-          cron: p.cron ?? '',
-        });
+        const p = params as { batches_per_run?: number | null };
+        const json = JSON.stringify({ batches_per_run: p.batches_per_run ?? 3 });
         const result = await runSkillCommand(cfg, 'set_process_schedule', json);
         return text(formatResult(result));
       },
