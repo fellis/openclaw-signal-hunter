@@ -80,6 +80,7 @@ class KeywordResolver:
             "keyword_type": profile.keyword_type.value,
             "description": profile.description,
             "aliases": profile.aliases,
+            "relevant_subreddits": profile.relevant_subreddits,
             "discovery": self._discovery_summary(discovered),
             "proposed_plan": proposals,
         }
@@ -156,6 +157,7 @@ class KeywordResolver:
             related_terms=enriched.get("related_terms", []),
             pain_patterns=enriched.get("pain_patterns", []),
             search_queries=enriched.get("search_queries", {}),
+            relevant_subreddits=enriched.get("relevant_subreddits", []),
         )
 
     @staticmethod
@@ -165,7 +167,7 @@ class KeywordResolver:
 Discovery facts from platform APIs:
 {json.dumps(discovery, ensure_ascii=False, indent=2)}
 
-Based ONLY on these facts (do not invent resources), return JSON:
+Based on these facts and your knowledge, return JSON:
 {{
   "keyword_type": "product | concept | problem | topic",
   "description": "1-2 sentence description of what this keyword is",
@@ -173,9 +175,13 @@ Based ONLY on these facts (do not invent resources), return JSON:
   "related_terms": ["related technical terms"],
   "pain_patterns": ["common complaint patterns users have with this"],
   "search_queries": {{
-    "github": ["additional search queries for GitHub"],
-    "reddit": ["subreddit-specific queries"]
-  }}
+    "github": ["additional GitHub search queries beyond discovered repos"]
+  }},
+  "relevant_subreddits": [
+    "list of subreddit NAMES (without r/) where this topic is actively discussed",
+    "include general tech subs if relevant (e.g. LocalLLaMA, MachineLearning, programming)",
+    "aim for 5-10 subreddits"
+  ]
 }}
 
 Return ONLY the JSON object, no markdown, no explanation.

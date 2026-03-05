@@ -114,6 +114,7 @@ class KeywordProfile:
     related_terms: list[str] = field(default_factory=list)
     pain_patterns: list[str] = field(default_factory=list)
     search_queries: dict[str, list[str]] = field(default_factory=dict)
+    relevant_subreddits: list[str] = field(default_factory=list)
 
 
 @dataclass

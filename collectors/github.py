@@ -75,7 +75,7 @@ class GitHubCollector(BaseCollector):
         repos: list[dict] = github_resources.repos if github_resources else []
 
         targets: list[SearchTarget] = []
-        for repo in repos[:5]:
+        for repo in repos[:10]:
             full_name = repo.get("full_name", "")
             if not full_name:
                 continue

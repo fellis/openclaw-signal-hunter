@@ -68,7 +68,7 @@ class RedditCollector(BaseCollector):
             with httpx.Client(headers=_HEADERS, timeout=10) as client:
                 resp = client.get(
                     f"{_REDDIT_BASE}/search.json",
-                    params={"q": keyword, "sort": "relevance", "limit": 5, "type": "link"},
+                    params={"q": keyword, "sort": "relevance", "limit": 25, "type": "link"},
                 )
                 if resp.status_code == 200:
                     items = resp.json().get("data", {}).get("children", [])
@@ -83,28 +83,51 @@ class RedditCollector(BaseCollector):
         return DiscoveredResources(subreddits=subreddits, extra={"mentioned_in": mentioned_in})
 
     def build_plan(self, profile: KeywordProfile) -> SearchPlan:
-        """Build subreddit targets from discovered resources."""
+        """Build subreddit targets from discovered resources and LLM-suggested subreddits."""
         reddit_resources = profile.discovered.get("reddit")
-        subreddits = reddit_resources.subreddits if reddit_resources else []
+        discovered_subs = reddit_resources.subreddits if reddit_resources else []
+
+        # Collect subreddit names from all sources (preserve order, deduplicate)
+        seen: set[str] = set()
+        sub_names: list[str] = []
+
+        # 1. Directly discovered subreddits (exact match for keyword name)
+        for sub in discovered_subs:
+            name = sub.get("name", "").lower()
+            if name and name not in seen:
+                seen.add(name)
+                sub_names.append(name)
+
+        # 2. LLM-suggested relevant subreddits
+        for name in profile.relevant_subreddits:
+            clean = name.strip().lstrip("r/").lower()
+            if clean and clean not in seen:
+                seen.add(clean)
+                sub_names.append(clean)
+
         targets: list[SearchTarget] = []
 
-        for sub in subreddits[:3]:
-            sub_name = sub.get("name", "")
-            if not sub_name:
-                continue
-            targets.append(SearchTarget(query="", scope="subreddit_new", params={"sub": sub_name}))
+        for sub_name in sub_names[:8]:
+            # Search within each relevant subreddit
             targets.append(SearchTarget(
                 query=profile.canonical_name,
                 scope="subreddit_search",
                 params={"sub": sub_name},
             ))
+            # Also pull latest posts from the subreddit itself if it's a direct match
+            if sub_name in {s.get("name", "").lower() for s in discovered_subs}:
+                targets.append(SearchTarget(
+                    query="",
+                    scope="subreddit_new",
+                    params={"sub": sub_name},
+                ))
 
-        if not targets:
-            targets.append(SearchTarget(
-                query=profile.canonical_name,
-                scope="global_search",
-                params={},
-            ))
+        # Always include a global search as a catch-all
+        targets.append(SearchTarget(
+            query=profile.canonical_name,
+            scope="global_search",
+            params={},
+        ))
 
         return SearchPlan(targets=targets, max_results_per_target=200)
 
