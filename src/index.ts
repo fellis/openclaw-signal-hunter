@@ -68,7 +68,6 @@ export default function register(api: PluginApi, configParam?: PluginConfig) {
           return tool.execute(id, params);
         },
       },
-      { optional: true }
     );
   }
 
