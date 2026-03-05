@@ -154,7 +154,7 @@ class LLMRouter:
                     "Local LLM config must be in .env, not in config.json."
                 )
             self._openai_client = OpenAI(
-                api_key=api_key, base_url=base_url, timeout=300.0
+                api_key=api_key, base_url=base_url, timeout=500.0
             )
             self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
 
