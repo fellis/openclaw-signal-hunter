@@ -40,8 +40,9 @@ class Processor:
         self._router = router
         self._storage = storage
         self._rules = rules
-        self._max_tokens_per_batch = config.get("processor", {}).get("max_tokens_per_batch", 15_000)
+        self._max_tokens_per_batch = config.get("processor", {}).get("max_tokens_per_batch", 10_000)
         self._db_fetch_size = config.get("processor", {}).get("batch_size", 200)
+        self._max_body_chars = config.get("processor", {}).get("max_body_chars", 1000)
         self._count_tokens = router.get_tokenizer()
 
     def process_all(self) -> int:
@@ -109,7 +110,9 @@ class Processor:
         for signal in signals:
             title = signal.get("title") or ""
             body = signal.get("body") or ""
-            # Combine title + body so LLM has context even for empty-body signals
+            # Truncate body to prevent outlier long signals from blowing up the batch
+            if len(body) > self._max_body_chars:
+                body = body[:self._max_body_chars] + "..."
             full_text = f"{title}\n\n{body}".strip() if title else body
             tokens = self._count_tokens(full_text)
 
