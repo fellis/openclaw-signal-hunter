@@ -66,9 +66,26 @@ def _err(msg: str, code: int = 1) -> None:
 # ------------------------------------------------------------------
 
 def cmd_status() -> None:
-    """Print system status: keywords, signal counts, LLM costs."""
+    """Print system status: keywords, signal counts, LLM costs, processor config."""
     storage = _make_storage()
-    _out(storage.get_status_summary())
+    config = _load_config()
+    proc = config.get("processor", {})
+    filters = config.get("filters", {})
+
+    summary = storage.get_status_summary()
+    summary["processor_config"] = {
+        "signals_per_batch":   proc.get("max_signals_per_batch", 10),
+        "max_tokens_per_batch": proc.get("max_tokens_per_batch", 10_000),
+        "max_body_chars":      proc.get("max_body_chars", 1000),
+        "batches_per_run":     proc.get("max_batches_per_run", 3),
+        "db_fetch_size":       proc.get("batch_size", 200),
+    }
+    summary["filters_config"] = {
+        "min_score":          filters.get("min_score", 0),
+        "max_age_days":       filters.get("max_age_days", 90),
+        "max_items_per_cycle": filters.get("max_items_per_cycle", 200),
+    }
+    _out(summary)
 
 
 def cmd_resolve(keyword: str) -> None:
