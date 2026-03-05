@@ -546,28 +546,41 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_set_process_schedule',
       description:
-        'Configure how many LLM batches to process per scheduled cron run. ' +
-        'Default: 3 batches per run, running every 5 min via OpenClaw cron. ' +
-        'Returns cron_job_id so you can then call cron.update to change the interval. ' +
-        'Triggers: "обработай 3 батча каждые 5 минут", "set batches to 5", ' +
-        '"change auto-processing schedule", "how many batches are processed automatically". ' +
-        'WORKFLOW: 1) call this tool with batches_per_run, ' +
-        '2) then call cron.update with the returned cron_job_id to change the cron interval.',
+        'Configure auto-processing schedule: how many batches per cron run and how many signals per batch. ' +
+        'Default: 3 batches per run, 10 signals per batch, cron every 5 min. ' +
+        'Returns cron_job_id to then update the cron interval via cron.update. ' +
+        'Triggers: "обработай 3 батча каждые 5 минут", "поставь 10 сигналов в батче", ' +
+        '"set batches to 5", "change auto-processing schedule", ' +
+        '"сколько сигналов в батче", "how many signals per batch". ' +
+        'WORKFLOW: 1) call this tool with batches_per_run and/or signals_per_batch, ' +
+        '2) then call cron.update with the returned cron_job_id to change the cron interval. ' +
+        'NOTE: signals_per_batch default 10 is safe for the current LLM server (nginx timeout 60s). ' +
+        'Increasing above 15 may cause timeouts.',
       parameters: {
         type: 'object',
         properties: {
           batches_per_run: {
             type: 'number',
             description:
-              'Number of LLM batches per cron run (default 3). ' +
-              'Each batch is ~10k tokens of signals. null = process all unprocessed signals per run.',
+              'Number of LLM batches to run per cron execution (default 3). ' +
+              'null = process all unprocessed signals per run.',
+          },
+          signals_per_batch: {
+            type: 'number',
+            description:
+              'Max signals per LLM batch (default 10). ' +
+              'Controls LLM response time - keep at 10 unless nginx timeout is increased. ' +
+              'At ~37 tok/s: 10 signals * 200 output tokens = ~54s (safe under 60s limit).',
           },
         },
         required: [],
       },
       async execute(_id, params) {
-        const p = params as { batches_per_run?: number | null };
-        const json = JSON.stringify({ batches_per_run: p.batches_per_run ?? 3 });
+        const p = params as { batches_per_run?: number | null; signals_per_batch?: number };
+        const json = JSON.stringify({
+          batches_per_run: p.batches_per_run ?? 3,
+          signals_per_batch: p.signals_per_batch ?? 10,
+        });
         const result = await runSkillCommand(cfg, 'set_process_schedule', json);
         return text(formatResult(result));
       },

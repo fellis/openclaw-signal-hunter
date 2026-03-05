@@ -423,12 +423,15 @@ _SH_CRON_JOB_ID = "7a3f9b2c-4e1d-4c8a-b5f6-0d2e8a1c9b3f"
 
 def cmd_set_process_schedule(json_str: str) -> None:
     """
-    Configure scheduled processing: batches per cron run.
-    json_str: '{"batches_per_run": 3}'
-    batches_per_run: null = process all signals; int = N batches per cron run (default 3)
+    Configure scheduled processing parameters.
+    json_str: '{"batches_per_run": 3, "signals_per_batch": 10}'
 
-    The cron interval itself is managed by OpenClaw's native cron.update tool using
-    the returned cron_job_id. This command only updates config.json.
+    batches_per_run: how many LLM batches per cron run (default 3, null = all)
+    signals_per_batch: max signals per LLM batch (default 10, controls response time)
+      - At ~37 tok/s with nginx timeout 60s: 10 signals * ~200 output tok = ~54s (safe)
+      - Increase only if nginx timeout is raised
+
+    The cron interval is managed via OpenClaw's cron.update using the returned cron_job_id.
     """
     try:
         data = json.loads(json_str)
@@ -437,18 +440,23 @@ def cmd_set_process_schedule(json_str: str) -> None:
         return
 
     batches_per_run = data.get("batches_per_run", 3)
+    signals_per_batch = data.get("signals_per_batch", 10)
 
     cm = _make_config_manager()
     config = cm.load()
-    config.setdefault("processor", {})["max_batches_per_run"] = batches_per_run
+    proc = config.setdefault("processor", {})
+    proc["max_batches_per_run"] = batches_per_run
+    proc["max_signals_per_batch"] = signals_per_batch
     cm.save(config)
 
     _out({
         "status": "ok",
         "batches_per_run": batches_per_run,
+        "signals_per_batch": signals_per_batch,
         "cron_job_id": _SH_CRON_JOB_ID,
         "note": (
-            f"Config saved: {batches_per_run} batch(es) per cron run. "
+            f"Config saved: {batches_per_run} batch(es) per cron run, "
+            f"{signals_per_batch} signals per batch. "
             f"To change the interval, call cron.update with jobId='{_SH_CRON_JOB_ID}' "
             "and patch.schedule (e.g. {\"kind\": \"cron\", \"expr\": \"*/5 * * * *\"})."
         ),

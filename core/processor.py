@@ -41,6 +41,7 @@ class Processor:
         self._storage = storage
         self._rules = rules
         self._max_tokens_per_batch = config.get("processor", {}).get("max_tokens_per_batch", 10_000)
+        self._max_signals_per_batch = config.get("processor", {}).get("max_signals_per_batch", 10)
         self._db_fetch_size = config.get("processor", {}).get("batch_size", 200)
         self._max_body_chars = config.get("processor", {}).get("max_body_chars", 1000)
         self._count_tokens = router.get_tokenizer()
@@ -123,7 +124,12 @@ class Processor:
     def _build_token_aware_batches(
         self, signals: list[dict[str, Any]]
     ) -> list[list[dict[str, Any]]]:
-        """Pack signals into batches respecting the token budget."""
+        """
+        Pack signals into batches respecting both limits:
+        - max_tokens_per_batch: input token budget (prevents overly large prompts)
+        - max_signals_per_batch: explicit signal count cap (controls output size and
+          LLM response time - default 10 to stay under nginx proxy_read_timeout=60s)
+        """
         batches: list[list[dict]] = []
         current: list[dict] = []
         current_tokens = 0
@@ -137,9 +143,15 @@ class Processor:
             full_text = f"{title}\n\n{body}".strip() if title else body
             tokens = self._count_tokens(full_text)
 
-            if current and current_tokens + tokens > self._max_tokens_per_batch:
+            over_token_budget = current and current_tokens + tokens > self._max_tokens_per_batch
+            over_signal_cap = len(current) >= self._max_signals_per_batch
+
+            if over_token_budget or over_signal_cap:
                 batches.append(current)
-                log.debug("[processor] batch closed: %d signals, %d tokens", len(current), current_tokens)
+                log.debug(
+                    "[processor] batch closed: %d signals, %d tokens (cap=%d)",
+                    len(current), current_tokens, self._max_signals_per_batch,
+                )
                 current = []
                 current_tokens = 0
 
@@ -148,7 +160,10 @@ class Processor:
 
         if current:
             batches.append(current)
-            log.debug("[processor] batch closed: %d signals, %d tokens", len(current), current_tokens)
+            log.debug(
+                "[processor] batch closed: %d signals, %d tokens (cap=%d)",
+                len(current), current_tokens, self._max_signals_per_batch,
+            )
 
         return batches
 
