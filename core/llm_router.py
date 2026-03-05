@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 # Maps substrings in LOCAL_LLM_MODEL to tokenizer factory functions.
 # Add new families here when switching local models.
-_MISTRAL_FAMILIES = {"mistral", "devstral", "mixtral", "codestral"}
+_MISTRAL_FAMILIES = {"mistral", "devstral", "mixtral", "codestral", "llm"}
 
 _ANTHROPIC_COST_PER_M = {
     "input": 3.0,
@@ -154,7 +154,7 @@ class LLMRouter:
                     "Local LLM config must be in .env, not in config.json."
                 )
             self._openai_client = OpenAI(
-                api_key=api_key, base_url=base_url, timeout=120.0
+                api_key=api_key, base_url=base_url, timeout=300.0
             )
             self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
 
