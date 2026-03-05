@@ -45,25 +45,40 @@ class Processor:
         self._max_body_chars = config.get("processor", {}).get("max_body_chars", 1000)
         self._count_tokens = router.get_tokenizer()
 
-    def process_all(self) -> int:
-        """Process all unclassified signals. Returns count of processed."""
+    def process_all(self, max_batches: int | None = None) -> int:
+        """
+        Process unclassified signals.
+        max_batches: if set, stop after processing this many LLM batches.
+                     Useful for cron-based drip processing (e.g. 1 batch per run).
+                     None means process everything available.
+        Returns count of processed signals.
+        """
         total = 0
+        batches_done = 0
+
         while True:
-            batch = self._storage.fetch_unprocessed(limit=self._db_fetch_size)
-            if not batch:
+            if max_batches is not None and batches_done >= max_batches:
+                log.info("[processor] reached max_batches=%d, stopping", max_batches)
                 break
 
-            log.info("[processor] fetched %d unprocessed signals", len(batch))
-            batches = self._build_token_aware_batches(batch)
+            signals = self._storage.fetch_unprocessed(limit=self._db_fetch_size)
+            if not signals:
+                break
 
-            for i, token_batch in enumerate(batches):
+            log.info("[processor] fetched %d unprocessed signals", len(signals))
+            token_batches = self._build_token_aware_batches(signals)
+
+            for i, token_batch in enumerate(token_batches):
+                if max_batches is not None and batches_done >= max_batches:
+                    break
                 log.info(
-                    "[processor] batch %d/%d (%d signals)",
-                    i + 1, len(batches), len(token_batch),
+                    "[processor] batch %d (%d signals)",
+                    batches_done + 1, len(token_batch),
                 )
                 total += self._process_with_retry(token_batch)
+                batches_done += 1
 
-        log.info("[processor] done. total processed: %d", total)
+        log.info("[processor] done. batches=%d processed=%d", batches_done, total)
         return total
 
     def _process_with_retry(self, batch: list[dict[str, Any]], depth: int = 0) -> int:

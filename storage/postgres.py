@@ -117,26 +117,105 @@ class PostgresStorage:
                 return str(row["id"]) if row and row["inserted"] else None
 
     def fetch_unprocessed(self, limit: int = 200) -> list[dict[str, Any]]:
-        """Return raw signals that have no corresponding processed_signals row."""
+        """
+        Return raw signals that have no processed_signals row.
+        Uses round-robin across keywords so no single keyword starves others:
+        fetches up to limit/N signals per keyword, then interleaves them.
+        Falls back to date-ordered global fetch when no keyword tags are present.
+        """
         with self._conn() as conn:
             with self._cursor(conn) as cur:
+                # Get distinct keywords from unprocessed signals' extra field
                 cur.execute(
                     """
-                    SELECT r.id, r.dedup_key, r.title, r.body, r.score, r.created_at, r.extra
+                    SELECT DISTINCT extra->>'keywords' as kw_json
                     FROM raw_signals r
                     LEFT JOIN processed_signals p ON p.raw_signal_id = r.id
                     WHERE p.id IS NULL
-                    ORDER BY r.created_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
+                      AND extra->>'keywords' IS NOT NULL
+                      AND extra->>'keywords' != '[]'
+                    LIMIT 20
+                    """
                 )
-                return [dict(row) for row in cur.fetchall()]
+                kw_rows = cur.fetchall()
+
+                if not kw_rows:
+                    # No keyword tags - plain fetch
+                    cur.execute(
+                        """
+                        SELECT r.id, r.dedup_key, r.title, r.body,
+                               r.score, r.created_at, r.extra
+                        FROM raw_signals r
+                        LEFT JOIN processed_signals p ON p.raw_signal_id = r.id
+                        WHERE p.id IS NULL
+                        ORDER BY r.created_at DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                    return [dict(row) for row in cur.fetchall()]
+
+                # Collect unique keywords across all unprocessed signals
+                import json as _json  # noqa: PLC0415
+                keywords: list[str] = []
+                seen: set[str] = set()
+                for row in kw_rows:
+                    try:
+                        kws = _json.loads(row["kw_json"] or "[]")
+                        for kw in kws:
+                            if kw and kw not in seen:
+                                seen.add(kw)
+                                keywords.append(kw)
+                    except Exception:
+                        pass
+
+                if not keywords:
+                    keywords = [""]
+
+                # Fetch per_kw signals per keyword, interleave results
+                per_kw = max(1, limit // len(keywords))
+                results: list[dict] = []
+                seen_ids: set[str] = set()
+
+                for kw in keywords:
+                    cur.execute(
+                        """
+                        SELECT r.id, r.dedup_key, r.title, r.body,
+                               r.score, r.created_at, r.extra
+                        FROM raw_signals r
+                        LEFT JOIN processed_signals p ON p.raw_signal_id = r.id
+                        WHERE p.id IS NULL
+                          AND extra->'keywords' @> %s::jsonb
+                        ORDER BY r.created_at DESC
+                        LIMIT %s
+                        """,
+                        (_json.dumps([kw]), per_kw),
+                    )
+                    for row in cur.fetchall():
+                        rid = str(row["id"])
+                        if rid not in seen_ids:
+                            seen_ids.add(rid)
+                            results.append(dict(row))
+
+                return results[:limit]
 
     def count_raw_signals(self) -> int:
         with self._conn() as conn:
             with self._cursor(conn) as cur:
                 cur.execute("SELECT COUNT(*) AS n FROM raw_signals")
+                return cur.fetchone()["n"]
+
+    def count_unprocessed(self) -> int:
+        """Count raw signals with no processed_signals row."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM raw_signals r
+                    LEFT JOIN processed_signals p ON p.raw_signal_id = r.id
+                    WHERE p.id IS NULL
+                    """
+                )
                 return cur.fetchone()["n"]
 
     # ------------------------------------------------------------------

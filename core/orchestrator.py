@@ -107,22 +107,25 @@ class Orchestrator:
         _emit({"status": "done", "phase": "collect", "total": total, "by_collector": by_collector})
         return {"total": total, "by_collector": by_collector}
 
-    def process(self, router) -> dict[str, Any]:
+    def process(self, router, max_batches: int | None = None) -> dict[str, Any]:
         """
-        Run LLM classification on all unprocessed signals.
-        Returns {total: int}.
+        Run LLM classification on unprocessed signals.
+        max_batches: None = process all; int = stop after N LLM batches (cron mode).
+        Returns {total: int, remaining: int}.
         """
         rules = self._load_rules()
         if not rules:
             _emit({"status": "done", "phase": "process", "total": 0,
                    "note": "No extraction_rules defined. Run suggest_rules first."})
-            return {"total": 0}
+            return {"total": 0, "remaining": 0}
 
         processor = Processor(router, self._storage, rules, self._config)
-        _emit({"status": "running", "phase": "process"})
-        total = processor.process_all()
-        _emit({"status": "done", "phase": "process", "total": total})
-        return {"total": total}
+        _emit({"status": "running", "phase": "process",
+               "mode": f"max_batches={max_batches}" if max_batches else "all"})
+        total = processor.process_all(max_batches=max_batches)
+        remaining = self._storage.count_unprocessed()
+        _emit({"status": "done", "phase": "process", "total": total, "remaining": remaining})
+        return {"total": total, "remaining": remaining}
 
     def embed_pending(self, device: str = "cpu") -> dict[str, Any]:
         """

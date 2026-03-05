@@ -540,6 +540,40 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
+    // Set process schedule
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_set_process_schedule',
+      description:
+        'Configure scheduled LLM processing: how many batches per run and cron interval. ' +
+        'Triggers: "process 1 batch every 5 minutes", "set process schedule", ' +
+        '"process automatically every 10 min", "disable auto processing".',
+      parameters: {
+        type: 'object',
+        properties: {
+          batches_per_run: {
+            type: 'number',
+            description: 'Number of LLM batches per cron run. null = process all at once.',
+          },
+          cron: {
+            type: 'string',
+            description: 'Cron expression e.g. "*/5 * * * *" = every 5 min. Empty to disable.',
+          },
+        },
+        required: [],
+      },
+      async execute(_id, params) {
+        const p = params as { batches_per_run?: number; cron?: string };
+        const json = JSON.stringify({
+          batches_per_run: p.batches_per_run ?? null,
+          cron: p.cron ?? '',
+        });
+        const result = await runSkillCommand(cfg, 'set_process_schedule', json);
+        return text(formatResult(result));
+      },
+    },
+
+    // ----------------------------------------------------------------
     // Generate change report
     // ----------------------------------------------------------------
     {
