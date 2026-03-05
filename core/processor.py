@@ -40,7 +40,7 @@ class Processor:
         self._router = router
         self._storage = storage
         self._rules = rules
-        self._max_tokens_per_batch = config.get("processor", {}).get("max_tokens_per_batch", 20_000)
+        self._max_tokens_per_batch = config.get("processor", {}).get("max_tokens_per_batch", 15_000)
         self._db_fetch_size = config.get("processor", {}).get("batch_size", 200)
         self._count_tokens = router.get_tokenizer()
 
