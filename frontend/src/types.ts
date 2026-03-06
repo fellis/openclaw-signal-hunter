@@ -30,6 +30,7 @@ export interface Cluster {
 export interface Signal {
   raw_signal_id: string
   title: string
+  title_original: string
   url: string
   source: string
   author: string
@@ -39,6 +40,8 @@ export interface Signal {
   created_at: string | null
   collected_at: string | null
   summary: string | null
+  summary_original: string | null
+  translation_available: boolean
   rank_score: number
   intensity: number
   confidence: number

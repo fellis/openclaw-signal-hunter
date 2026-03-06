@@ -6,6 +6,7 @@ export async function semanticSearch(
   filters: Partial<Filters> = {},
   topK = 50,
   threshold = 0.45,
+  lang = 'en',
 ): Promise<{ results: SearchResult[]; total: number; query: string }> {
   const qs = buildQueryString({
     q,
@@ -20,6 +21,7 @@ export async function semanticSearch(
     languages: filters.languages || [],
     date_from: filters.date_from || '',
     date_to: filters.date_to || '',
+    lang,
   })
   const res = await fetch(`/api/search/semantic?${qs}`)
   if (!res.ok) throw new Error(`Semantic search failed: ${res.status}`)
@@ -30,6 +32,7 @@ export async function textSearch(
   q: string,
   filters: Partial<Filters> = {},
   limit = 50,
+  lang = 'en',
 ): Promise<{ results: SearchResult[]; total: number; query: string }> {
   const qs = buildQueryString({
     q,
@@ -38,6 +41,7 @@ export async function textSearch(
     keywords: filters.keywords || [],
     date_from: filters.date_from || '',
     date_to: filters.date_to || '',
+    lang,
   })
   const res = await fetch(`/api/search/text?${qs}`)
   if (!res.ok) throw new Error(`Text search failed: ${res.status}`)

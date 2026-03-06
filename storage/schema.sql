@@ -112,6 +112,19 @@ CREATE INDEX IF NOT EXISTS idx_llm_task_queue_next
     ON llm_task_queue (priority ASC, created_at ASC)
     WHERE status = 'pending';
 
+-- Normalized translations table: one row per (signal, language, field).
+-- Keeps EN originals untouched; langs added as new rows without schema change.
+CREATE TABLE IF NOT EXISTS signal_translations (
+    signal_id   UUID    NOT NULL REFERENCES raw_signals(id) ON DELETE CASCADE,
+    lang        TEXT    NOT NULL,   -- 'ru', 'de', 'fr', ...
+    field       TEXT    NOT NULL,   -- 'title', 'summary'
+    text        TEXT    NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (signal_id, lang, field)
+);
+CREATE INDEX IF NOT EXISTS idx_signal_translations_sid  ON signal_translations (signal_id);
+CREATE INDEX IF NOT EXISTS idx_signal_translations_lang ON signal_translations (lang, field);
+
 CREATE TABLE IF NOT EXISTS llm_usage_log (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     provider        TEXT NOT NULL,

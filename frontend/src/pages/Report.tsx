@@ -27,7 +27,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-export default function Report() {
+export default function Report({ lang = 'en' }: { lang?: string }) {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [categories, setCategories] = useState<Category[]>([])
   const [total, setTotal] = useState(0)
@@ -113,7 +113,7 @@ export default function Report() {
             No signals found for current filters.
           </div>
         ) : (
-          <SignalTable categories={categories} filters={filters} />
+          <SignalTable categories={categories} filters={filters} lang={lang} />
         )}
       </div>
     </div>

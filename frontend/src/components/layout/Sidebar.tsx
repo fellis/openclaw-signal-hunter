@@ -1,5 +1,5 @@
 import { BarChart2, Search, Zap, Moon, Sun } from 'lucide-react'
-import type { Page } from '@/App'
+import type { Page, Lang } from '@/App'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -7,6 +7,8 @@ interface Props {
   setPage: (p: Page) => void
   dark: boolean
   setDark: (d: boolean) => void
+  lang: Lang
+  setLang: (l: Lang) => void
 }
 
 const NAV = [
@@ -15,7 +17,7 @@ const NAV = [
   { id: 'search' as Page, icon: Search, label: 'Search' },
 ]
 
-export default function Sidebar({ page, setPage, dark, setDark }: Props) {
+export default function Sidebar({ page, setPage, dark, setDark, lang, setLang }: Props) {
   return (
     <aside
       className="flex flex-col w-14 shrink-0 border-r"
@@ -47,6 +49,26 @@ export default function Sidebar({ page, setPage, dark, setDark }: Props) {
           </button>
         ))}
       </nav>
+
+      {/* Language toggle EN / RU */}
+      <div className="flex flex-col items-center gap-1 pb-2">
+        {(['en', 'ru'] as Lang[]).map((l) => (
+          <button
+            key={l}
+            onClick={() => setLang(l)}
+            title={l === 'en' ? 'English' : 'Русский'}
+            className={cn(
+              'w-9 h-7 rounded text-[11px] font-semibold transition-colors',
+              lang === l
+                ? 'text-white'
+                : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text)]',
+            )}
+            style={lang === l ? { background: 'var(--accent)' } : {}}
+          >
+            {l.toUpperCase()}
+          </button>
+        ))}
+      </div>
 
       {/* Theme toggle */}
       <div className="flex items-center justify-center pb-4">

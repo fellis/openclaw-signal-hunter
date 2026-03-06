@@ -78,12 +78,33 @@ services:
       - DATABASE_URL=postgresql://signal:signal@postgres:5432/signal_hunter
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDER_URL=http://embedder:6335
+      # Translator runs on the Devstral GPU server (MADLAD-400-3B on 64 EPYC cores)
+      - TRANSLATOR_URL=http://10.10.10.4:6340
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/stats || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  translate-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: signal-hunter-translate-worker
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://signal:signal@postgres:5432/signal_hunter
+      - TRANSLATOR_URL=http://10.10.10.4:6340
+      - TARGET_LANG=ru
+      - BATCH_SIZE=32
+      - POLL_INTERVAL=30
+    command: ["python", "-m", "core.translate_worker"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:

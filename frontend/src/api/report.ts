@@ -49,8 +49,9 @@ export async function fetchSignals(
   ids: string[],
   sortBy = 'rank_score',
   sortDir = 'desc',
+  lang = 'en',
 ): Promise<SignalsResponse> {
-  const qs = buildQueryString({ ids, sort_by: sortBy, sort_dir: sortDir })
+  const qs = buildQueryString({ ids, sort_by: sortBy, sort_dir: sortDir, lang })
   const res = await fetch(`/api/report/signals?${qs}`)
   if (!res.ok) throw new Error(`Signals fetch failed: ${res.status}`)
   return res.json()

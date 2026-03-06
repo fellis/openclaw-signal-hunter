@@ -376,12 +376,18 @@ async def get_signals(
     ids: list[str] = Query(default=[]),
     sort_by: str = Query("collected_at"),
     sort_dir: str = Query("desc"),
+    lang: str = Query("en"),
 ):
-    """Return level-3 full signal data by raw_signal_ids."""
+    """Return level-3 full signal data by raw_signal_ids.
+
+    When lang != 'en', titles and summaries are replaced with stored translations
+    where available (original is kept as fallback).
+    """
     if not ids:
         return {"signals": []}
 
-    # Postgres expects uuid[] literal
+    # LEFT JOIN translations for the requested language so we get both
+    # original and translated in a single query without N+1.
     rows = fetchall(
         """
         SELECT
@@ -401,22 +407,35 @@ async def get_signals(
             p.confidence::float,
             p.language,
             p.matched_rules,
-            p.keywords_matched
+            p.keywords_matched,
+            tt.text AS title_translated,
+            ts.text AS summary_translated
         FROM raw_signals r
         JOIN processed_signals p ON p.raw_signal_id = r.id
+        LEFT JOIN signal_translations tt
+               ON tt.signal_id = r.id AND tt.lang = %s AND tt.field = 'title'
+        LEFT JOIN signal_translations ts
+               ON ts.signal_id = r.id AND ts.lang = %s AND ts.field = 'summary'
         WHERE r.id = ANY(%s::uuid[])
         ORDER BY p.rank_score DESC NULLS LAST
         """,
-        (ids,),
+        (lang, lang, ids),
     )
+
+    use_translation = lang != "en"
 
     signals = []
     for row in rows:
         rules = _parse_matched_rules(row.get("matched_rules"))
         rule_names = [r.get("rule_name") for r in rules if isinstance(r, dict)]
+
+        title   = (row["title_translated"] or row["title"]) if use_translation else row["title"]
+        summary = (row["summary_translated"] or row["summary"]) if use_translation else row["summary"]
+
         signals.append({
             "raw_signal_id": row["raw_signal_id"],
-            "title": row["title"],
+            "title": title,
+            "title_original": row["title"],
             "url": row["url"],
             "source": row["source"],
             "author": row["author"],
@@ -425,7 +444,9 @@ async def get_signals(
             "views_count": row["views_count"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "collected_at": row["collected_at"].isoformat() if row["collected_at"] else None,
-            "summary": row["summary"],
+            "summary": summary,
+            "summary_original": row["summary"],
+            "translation_available": bool(row["title_translated"]),
             "rank_score": row["rank_score"],
             "intensity": row["intensity"],
             "confidence": row["confidence"],

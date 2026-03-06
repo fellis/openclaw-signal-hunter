@@ -76,7 +76,7 @@ function ResultRow({ result, mode }: { result: SearchResult; mode: Mode }) {
   )
 }
 
-export default function Search() {
+export default function Search({ lang = 'en' }: { lang?: string }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<Mode>('semantic')
   const [results, setResults] = useState<SearchResult[]>([])
@@ -91,8 +91,9 @@ export default function Search() {
     setError(null)
     setSearched(true)
     try {
-      const fn = mode === 'semantic' ? semanticSearch : textSearch
-      const data = await fn(query.trim())
+      const data = mode === 'semantic'
+        ? await semanticSearch(query.trim(), {}, 50, 0.45, lang)
+        : await textSearch(query.trim(), {}, 50, lang)
       setResults(data.results)
       setTotal(data.total)
     } catch (e) {
@@ -101,7 +102,7 @@ export default function Search() {
     } finally {
       setLoading(false)
     }
-  }, [query, mode])
+  }, [query, mode, lang])
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') search()

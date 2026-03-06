@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { ChevronRight, ExternalLink, Loader2 } from 'lucide-react'
 import { cn, formatRelative, SOURCE_LABELS, CATEGORY_COLORS, SOURCE_COLORS, intensityLabel } from '@/lib/utils'
 import { fetchClusters, fetchSignals } from '@/api/report'
@@ -95,7 +95,8 @@ function SortHeader({
 // Signal row (level 3)
 // ---------------------------------------------------------------------------
 
-function SignalRow({ signal }: { signal: Signal }) {
+function SignalRow({ signal, lang = 'en' }: { signal: Signal; lang?: string }) {
+  const showLangBadge = lang !== 'en'
   return (
     <tr
       className="table-row-hover border-b"
@@ -116,6 +117,19 @@ function SignalRow({ signal }: { signal: Signal }) {
             >
               <span className="truncate block max-w-xs">{signal.title}</span>
               <ExternalLink size={10} className="shrink-0 opacity-40" />
+              {showLangBadge && (
+                <span
+                  title={signal.translation_available ? 'Translated' : 'Translation pending'}
+                  className="ml-0.5 inline-flex items-center px-1 py-0 rounded text-2xs font-bold shrink-0"
+                  style={{
+                    background: signal.translation_available ? 'var(--accent)20' : 'var(--bg-3)',
+                    color: signal.translation_available ? 'var(--accent)' : 'var(--text-muted)',
+                    border: `1px solid ${signal.translation_available ? 'var(--accent)' : 'var(--border)'}`,
+                  }}
+                >
+                  {signal.translation_available ? lang.toUpperCase() : '~'}
+                </span>
+              )}
             </a>
             {signal.summary && (
               <p className="mt-0.5 text-2xs leading-relaxed line-clamp-2" style={{ color: 'var(--text-muted)' }}>
@@ -178,12 +192,14 @@ function ClusterRow({
   sortBy,
   sortDir,
   onSort,
+  lang = 'en',
 }: {
   cluster: Cluster
   maxRankScore: number
   sortBy: SortKeyL3
   sortDir: 'asc' | 'desc'
   onSort: (col: string) => void
+  lang?: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const [signals, setSignals] = useState<Signal[] | null>(null)
@@ -193,14 +209,24 @@ function ClusterRow({
     if (!expanded && signals === null) {
       setLoading(true)
       try {
-        const data = await fetchSignals(cluster.signal_ids, sortBy, sortDir)
+        const data = await fetchSignals(cluster.signal_ids, sortBy, sortDir, lang)
         setSignals(data.signals)
       } finally {
         setLoading(false)
       }
     }
     setExpanded(prev => !prev)
-  }, [expanded, signals, cluster.signal_ids, sortBy, sortDir])
+  }, [expanded, signals, cluster.signal_ids, sortBy, sortDir, lang])
+
+  // Reload signals when lang changes while cluster is expanded
+  useEffect(() => {
+    if (expanded && signals !== null) {
+      fetchSignals(cluster.signal_ids, sortBy, sortDir, lang)
+        .then(data => setSignals(data.signals))
+        .catch(() => {})
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang])
 
   return (
     <>
@@ -250,7 +276,7 @@ function ClusterRow({
       </tr>
 
       {expanded && signals && signals.map(s => (
-        <SignalRow key={s.raw_signal_id} signal={s} />
+        <SignalRow key={s.raw_signal_id} signal={s} lang={lang} />
       ))}
     </>
   )
@@ -267,6 +293,7 @@ function CategoryRow({
   sortDir,
   onSort,
   filters,
+  lang = 'en',
 }: {
   category: Category
   maxRankScore: number
@@ -274,6 +301,7 @@ function CategoryRow({
   sortDir: 'asc' | 'desc'
   onSort: (col: string) => void
   filters: Filters
+  lang?: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const [clusters, setClusters] = useState<Cluster[] | null>(null)
@@ -356,6 +384,7 @@ function CategoryRow({
             sortBy={clusterSort}
             sortDir={clusterSortDir}
             onSort={handleClusterSort}
+            lang={lang}
           />
         ))
       })()}
@@ -370,9 +399,10 @@ function CategoryRow({
 interface TableProps {
   categories: Category[]
   filters: Filters
+  lang?: string
 }
 
-export default function SignalTable({ categories, filters }: TableProps) {
+export default function SignalTable({ categories, filters, lang = 'en' }: TableProps) {
   const [sortBy, setSortBy] = useState<SortKey>('rank_score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -452,6 +482,7 @@ export default function SignalTable({ categories, filters }: TableProps) {
               sortDir={sortDir}
               onSort={handleSort}
               filters={filters}
+              lang={lang}
             />
           ))}
         </tbody>

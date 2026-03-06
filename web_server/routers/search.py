@@ -104,20 +104,15 @@ def _qdrant_search(
         return []
 
 
-def _enrich_from_pg(qdrant_results: list[dict]) -> list[dict]:
+def _enrich_from_pg(qdrant_results: list[dict], lang: str = "en") -> list[dict]:
     """Join Qdrant results with PostgreSQL for full signal data."""
     if not qdrant_results:
         return []
 
-    # Qdrant IDs are uint64 - we need raw_signal_ids
-    # The payload has title/url, but we need summary, author, etc. from PG.
-    # Since we don't have a direct qdrant_id -> raw_signal_id reverse map,
-    # we use the payload url to look up the raw_signal.
     urls = [r["payload"].get("url") for r in qdrant_results if r["payload"].get("url")]
     if not urls:
         return []
 
-    # Map url -> similarity
     url_to_sim = {r["payload"]["url"]: r["similarity"] for r in qdrant_results}
 
     rows = fetchall(
@@ -136,21 +131,31 @@ def _enrich_from_pg(qdrant_results: list[dict]) -> list[dict]:
             p.rank_score::float,
             p.intensity,
             p.confidence::float,
-            p.language
+            p.language,
+            tt.text AS title_translated,
+            ts.text AS summary_translated
         FROM raw_signals r
         JOIN processed_signals p ON p.raw_signal_id = r.id
+        LEFT JOIN signal_translations tt
+               ON tt.signal_id = r.id AND tt.lang = %s AND tt.field = 'title'
+        LEFT JOIN signal_translations ts
+               ON ts.signal_id = r.id AND ts.lang = %s AND ts.field = 'summary'
         WHERE r.url = ANY(%s)
         """,
-        (urls,),
+        (lang, lang, urls),
     )
 
+    use_translation = lang != "en"
     results = []
     for row in rows:
         url = row["url"]
         sim = url_to_sim.get(url, 0.0)
+        title   = (row["title_translated"] or row["title"]) if use_translation else row["title"]
+        summary = (row["summary_translated"] or row["summary"]) if use_translation else row["summary"]
         results.append({
             "raw_signal_id": row["raw_signal_id"],
-            "title": row["title"],
+            "title": title,
+            "title_original": row["title"],
             "url": url,
             "source": row["source"],
             "author": row["author"],
@@ -158,7 +163,9 @@ def _enrich_from_pg(qdrant_results: list[dict]) -> list[dict]:
             "comments_count": row["comments_count"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "collected_at": row["collected_at"].isoformat() if row["collected_at"] else None,
-            "summary": row["summary"],
+            "summary": summary,
+            "summary_original": row["summary"],
+            "translation_available": bool(row["title_translated"]),
             "rank_score": row["rank_score"],
             "intensity": row["intensity"],
             "confidence": row["confidence"],
@@ -186,6 +193,7 @@ async def semantic_search(
     languages: list[str] = Query(default=[]),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    lang: str = Query("en"),
 ):
     """Semantic search via Qdrant with payload filters."""
     cache = request.app.state.cache
@@ -221,7 +229,7 @@ async def semantic_search(
         date_to=date_to,
     )
 
-    results = _enrich_from_pg(hits)
+    results = _enrich_from_pg(hits, lang=lang)
     response = {"results": results, "total": len(results), "query": q}
     cache.set("semantic_search", cache_key, value=response, ttl=3600)
     return response
@@ -238,12 +246,14 @@ async def text_search(
     date_to: str | None = Query(None),
     sort_by: str = Query("rank_score"),
     sort_dir: str = Query("desc"),
+    lang: str = Query("en"),
 ):
     """Full-text search via PostgreSQL ILIKE."""
     cache = request.app.state.cache
     cache_key = dict(
         q=q, limit=limit, sources=sorted(sources), keywords=sorted(keywords),
         date_from=date_from, date_to=date_to, sort_by=sort_by, sort_dir=sort_dir,
+        lang=lang,
     )
     cached = cache.get("text_search", cache_key)
     if cached is not None:
@@ -251,7 +261,7 @@ async def text_search(
 
     conditions = ["p.is_relevant = true", "(r.title ILIKE %s OR r.body ILIKE %s)"]
     pattern = f"%{q}%"
-    params: list[Any] = [pattern, pattern]
+    params: list[Any] = [pattern, pattern, lang, lang]
 
     if sources:
         conditions.append("r.source = ANY(%s)")
@@ -290,9 +300,15 @@ async def text_search(
             p.rank_score::float,
             p.intensity,
             p.confidence::float,
-            p.language
+            p.language,
+            tt.text AS title_translated,
+            ts.text AS summary_translated
         FROM processed_signals p
         JOIN raw_signals r ON r.id = p.raw_signal_id
+        LEFT JOIN signal_translations tt
+               ON tt.signal_id = r.id AND tt.lang = %s AND tt.field = 'title'
+        LEFT JOIN signal_translations ts
+               ON ts.signal_id = r.id AND ts.lang = %s AND ts.field = 'summary'
         WHERE {where}
         ORDER BY p.{order_col} {order_dir} NULLS LAST
         LIMIT %s
@@ -300,10 +316,12 @@ async def text_search(
         params,
     )
 
+    use_translation = lang != "en"
     results = [
         {
             "raw_signal_id": row["raw_signal_id"],
-            "title": row["title"],
+            "title": (row["title_translated"] or row["title"]) if use_translation else row["title"],
+            "title_original": row["title"],
             "url": row["url"],
             "source": row["source"],
             "author": row["author"],
@@ -311,7 +329,9 @@ async def text_search(
             "comments_count": row["comments_count"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "collected_at": row["collected_at"].isoformat() if row["collected_at"] else None,
-            "summary": row["summary"],
+            "summary": (row["summary_translated"] or row["summary"]) if use_translation else row["summary"],
+            "summary_original": row["summary"],
+            "translation_available": bool(row["title_translated"]),
             "rank_score": row["rank_score"],
             "intensity": row["intensity"],
             "confidence": row["confidence"],
