@@ -18,7 +18,6 @@ export async function semanticSearch(
     intensity_max: filters.intensity_max ?? '',
     confidence_min: filters.confidence_min ?? '',
     confidence_max: filters.confidence_max ?? '',
-    languages: filters.languages || [],
     date_from: filters.date_from || '',
     date_to: filters.date_to || '',
     lang,
