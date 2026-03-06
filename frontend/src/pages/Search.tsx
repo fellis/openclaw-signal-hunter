@@ -56,15 +56,17 @@ function ResultRow({ result, mode }: { result: SearchResult; mode: Mode }) {
           )}
         </div>
 
-        <div className="text-right shrink-0 space-y-1" style={{ minWidth: 90 }}>
-          <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
-            {formatRelative(result.created_at)}
-          </div>
-          {result.collected_at && (
-            <div className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-              col. {formatRelative(result.collected_at)}
+        <div className="shrink-0 flex flex-col gap-0.5 items-end" style={{ minWidth: 160 }}>
+          <div className="flex gap-3">
+            <div className="flex flex-col items-end">
+              <span className="text-2xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)', opacity: 0.6 }}>Published</span>
+              <span className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>{formatRelative(result.created_at)}</span>
             </div>
-          )}
+            <div className="flex flex-col items-end">
+              <span className="text-2xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)', opacity: 0.6 }}>Collected</span>
+              <span className="text-xs tabular-nums" style={{ color: 'var(--accent)' }}>{formatRelative(result.collected_at)}</span>
+            </div>
+          </div>
           <div className="text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
             ↑{result.score} · {result.comments_count}💬
           </div>
