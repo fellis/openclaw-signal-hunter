@@ -697,6 +697,58 @@ Weights: engagement 30%, quality (intensity × confidence) 70%, half-life 7 days
 
 ---
 
+## Troubleshooting
+
+### Embed Worker cron always skipped (`lastStatus: "skipped"`)
+
+**Symptom:** Raw signals accumulate unprocessed. `~/.openclaw/cron/jobs.json` shows the Embed Worker with `lastStatus: "skipped"`, sometimes with `lastError: "empty-heartbeat-file"`.
+
+**Root cause:** The Embed Worker cron was created with `sessionTarget: "main"`. With that setting OpenClaw checks the agent's `HEARTBEAT.md` file before triggering the job. The heartbeat file is intentionally empty ("keep empty to skip heartbeat calls"), so OpenClaw treats the session as inactive and skips the job every time.
+
+**Fix:** Open `~/.openclaw/cron/jobs.json` and find the job with `"name": "Signal Hunter - Embed Worker"`. Set it to:
+
+```json
+{
+  "sessionTarget": "isolated",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Run signal_hunter_run_embed_worker to classify pending signals. Report briefly: how many classified, how many remaining."
+  },
+  "delivery": { "mode": "none" }
+}
+```
+
+Then restart the OpenClaw container. The worker will create a fresh isolated session on each cron tick - no heartbeat dependency.
+
+**Correct configuration for all Signal Hunter cron jobs:**
+
+| Job | sessionTarget | payload.kind | delivery.mode |
+|---|---|---|---|
+| Embed Worker | `isolated` | `agentTurn` | `none` |
+| LLM Worker | `isolated` | `agentTurn` | `none` |
+| Collect Worker | `isolated` | `agentTurn` | `none` |
+| Auto Embed | `isolated` | `agentTurn` | `none` |
+
+> Note: OpenClaw may overwrite `delivery.mode` back to `"announce"` after the first cron run. If skipping resumes, re-apply the fix.
+
+### Keyword resolve tasks stuck in `failed` with `Internal Server Error`
+
+**Symptom:** `llm_task_queue` shows multiple `resolve` tasks with `status=failed`, `error="Internal Server Error"` and `retry_count=3`.
+
+**Root cause:** The local LLM endpoint is returning HTTP 500. Most common cause: the discovery prompt is too large for the model's context window. GitHub repos can have README-length descriptions (5000+ chars), making prompts exceed 50K+ tokens for popular keywords like GPT-4.1, Gemini, etc.
+
+**Fix:** Already patched in `core/resolver.py` - `_slim_for_llm()` caps all string fields at 1000 chars before building the prompt (~2-5K tokens, well within any 32K+ context window).
+
+To reset stuck tasks and retry:
+
+```sql
+UPDATE llm_task_queue
+SET status = 'pending', retry_count = 0, error = NULL
+WHERE status = 'failed' AND task_type = 'resolve';
+```
+
+---
+
 ## License
 
 MIT
