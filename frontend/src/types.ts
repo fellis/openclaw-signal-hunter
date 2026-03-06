@@ -105,5 +105,4 @@ export interface Filters {
   intensity_max: number | null
   confidence_min: number | null
   confidence_max: number | null
-  languages: string[]
 }

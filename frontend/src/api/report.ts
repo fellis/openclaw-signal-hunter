@@ -20,7 +20,6 @@ function filtersToParams(f: Partial<Filters>): Record<string, unknown> {
     intensity_max: f.intensity_max ?? '',
     confidence_min: f.confidence_min ?? '',
     confidence_max: f.confidence_max ?? '',
-    languages: f.languages || [],
   }
 }
 

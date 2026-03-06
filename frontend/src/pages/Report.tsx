@@ -15,7 +15,6 @@ const DEFAULT_FILTERS: Filters = {
   intensity_max: null,
   confidence_min: null,
   confidence_max: null,
-  languages: [],
 }
 
 function StatCard({ label, value }: { label: string; value: string | number }) {

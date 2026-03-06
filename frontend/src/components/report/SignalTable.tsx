@@ -412,6 +412,7 @@ export default function SignalTable({ categories, filters, lang = 'en' }: TableP
   }
 
   const maxRankScore = Math.max(...categories.map(c => c.rank_score), 1)
+  const filtersKey = JSON.stringify(filters)
 
   const sorted = [...categories].sort((a, b) => {
     const av = a[sortBy] ?? 0
@@ -475,7 +476,7 @@ export default function SignalTable({ categories, filters, lang = 'en' }: TableP
         <tbody>
           {sorted.map(cat => (
             <CategoryRow
-              key={cat.name}
+              key={`${cat.name}:${filtersKey}`}
               category={cat}
               maxRankScore={maxRankScore}
               sortBy={sortBy}

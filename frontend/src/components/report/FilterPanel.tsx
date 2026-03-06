@@ -17,8 +17,6 @@ const CATEGORIES = [
   'pain_point', 'feature_request', 'adoption_signal',
   'comparison', 'migration', 'breaking_change', 'new_release',
 ]
-const LANGUAGES = ['en', 'ru', 'de', 'fr', 'zh', 'ja', 'ko', 'pt', 'es']
-
 interface Props {
   filters: Filters
   onChange: (f: Partial<Filters>) => void
@@ -167,7 +165,6 @@ export default function FilterPanel({ filters, onChange }: Props) {
     filters.sources.length,
     filters.categories.length,
     filters.keywords.length,
-    filters.languages.length,
     filters.intensity_min !== null || filters.intensity_max !== null ? 1 : 0,
     filters.confidence_min !== null || filters.confidence_max !== null ? 1 : 0,
     filters.date_from ? 1 : 0,
@@ -176,7 +173,7 @@ export default function FilterPanel({ filters, onChange }: Props) {
 
   const clearAll = () =>
     onChange({
-      sources: [], categories: [], keywords: [], languages: [],
+      sources: [], categories: [], keywords: [],
       intensity_min: null, intensity_max: null,
       confidence_min: null, confidence_max: null,
       date_from: '', date_to: '',
@@ -231,12 +228,6 @@ export default function FilterPanel({ filters, onChange }: Props) {
         options={keywords}
         selected={filters.keywords}
         onChange={v => onChange({ keywords: v })}
-      />
-      <MultiSelect
-        label="Language"
-        options={LANGUAGES}
-        selected={filters.languages}
-        onChange={v => onChange({ languages: v })}
       />
       <RangeFilter
         label="Intensity"
