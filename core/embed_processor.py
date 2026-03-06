@@ -26,17 +26,11 @@ from typing import Any
 
 import numpy as np
 
-from core.llm_router import LLMCall, LLMRouter
+from core.llm_router import LLMRouter
 from core.models import ExtractionRule, MatchedRule, ProcessedSignal
 from storage.postgres import PostgresStorage
 
 log = logging.getLogger(__name__)
-
-_SUMMARY_SYSTEM = (
-    "You are a concise technical analyst. "
-    "Return ONLY the summary text, no markdown, no labels, no explanation."
-)
-
 
 class EmbedProcessor:
     """
@@ -78,8 +72,7 @@ class EmbedProcessor:
         self._relevance_threshold = float(proc_cfg.get("relevance_threshold", self._RELEVANCE_THRESHOLD))
         self._rule_threshold = float(proc_cfg.get("rule_threshold", self._RULE_THRESHOLD))
         self._embed_batch_size = int(proc_cfg.get("embed_batch_size", 32))
-        self._summary_batch_size = int(proc_cfg.get("summary_batch_size", 5))
-        self._db_fetch_size = int(proc_cfg.get("batch_size", 200))
+        self._db_fetch_size = int(proc_cfg.get("batch_size", 50))
         self._max_body_chars = int(proc_cfg.get("max_body_chars", 1000))
 
         embedder_cfg = config.get("embedder", {})
@@ -170,11 +163,7 @@ class EmbedProcessor:
                 batches_done + 1, len(relevant_signals), len(irrelevant_signals),
             )
 
-            # Generate summaries for relevant signals via LLM
-            if relevant_signals:
-                self._fill_summaries(relevant_signals)
-
-            # Save all
+            # Save all - summary is generated async by summarize_batch task
             saved = 0
             for signal, cls in relevant_signals + irrelevant_signals:
                 ps = self._build_processed_signal(cls, signal)
@@ -282,76 +271,6 @@ class EmbedProcessor:
             if sim >= threshold:
                 return intensity
         return 1
-
-    # ------------------------------------------------------------------
-    # Private: LLM summary
-    # ------------------------------------------------------------------
-
-    def _fill_summaries(self, relevant: list[tuple[dict, dict]]) -> None:
-        """
-        Generate 1-2 sentence summaries for relevant signals via LLM.
-        Processes in small batches to stay within token budget.
-        Modifies cls dicts in-place.
-        """
-        for i in range(0, len(relevant), self._summary_batch_size):
-            batch = relevant[i : i + self._summary_batch_size]
-            texts = [s["_text"] for s, _ in batch]
-            try:
-                summaries = self._llm_summarize_batch(texts)
-                for (_, cls), summary in zip(batch, summaries):
-                    cls["summary"] = summary
-            except Exception as e:
-                log.warning("[embed_processor] summary batch %d failed: %s", i, e)
-                for _, cls in batch:
-                    cls["summary"] = None
-
-    def _llm_summarize_batch(self, texts: list[str]) -> list[str]:
-        """
-        Ask LLM to summarize N texts in one call.
-        Returns list of summary strings in the same order.
-        Falls back to None entries if parsing fails.
-        """
-        items = "\n\n".join(
-            f"[{i}]\n{t[:600]}" for i, t in enumerate(texts)
-        )
-        prompt = (
-            f"Write a 1-2 sentence summary in English for each of the following {len(texts)} texts. "
-            f"Return a JSON array of strings in the same order, e.g. [\"summary0\", \"summary1\"].\n\n"
-            f"{items}\n\nReturn ONLY the JSON array."
-        )
-        # ~150 output tokens per summary, minimum 512
-        max_tokens = max(512, len(texts) * 150)
-        call = LLMCall(
-            operation="process",
-            messages=[
-                {"role": "system", "content": _SUMMARY_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-            temperature=0.0,
-        )
-        raw = self._router.complete(call).strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-        try:
-            summaries = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try to recover partial JSON array by closing it
-            try:
-                recovered = raw.rstrip(", \n") + '"]'
-                summaries = json.loads(recovered)
-            except json.JSONDecodeError:
-                log.warning("[embed_processor] could not parse summary response, using None for batch")
-                return [None] * len(texts)
-
-        if not isinstance(summaries, list):
-            return [None] * len(texts)
-
-        # Pad or trim to match expected count
-        while len(summaries) < len(texts):
-            summaries.append(None)
-        return summaries[: len(texts)]
 
     # ------------------------------------------------------------------
     # Private: build ProcessedSignal

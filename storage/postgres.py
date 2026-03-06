@@ -277,15 +277,53 @@ class PostgresStorage:
                         ps.linked_group_id,
                     ),
                 )
-                if ps.is_relevant and ps.summary:
-                    cur.execute(
-                        """
-                        INSERT INTO embedding_queue (dedup_key)
-                        VALUES (%s)
-                        ON CONFLICT (dedup_key) DO NOTHING
-                        """,
-                        (ps.dedup_key,),
-                    )
+                # embedding_queue is populated by update_summary once summary is ready
+
+    def fetch_unsummarized(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return relevant processed signals that have no summary yet."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        ps.raw_signal_id,
+                        ps.dedup_key,
+                        COALESCE(r.title, '') || ' ' || COALESCE(r.body, '') AS text
+                    FROM processed_signals ps
+                    JOIN raw_signals r ON r.id = ps.raw_signal_id
+                    WHERE ps.is_relevant = true AND ps.summary IS NULL
+                    ORDER BY ps.processed_at
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def count_unsummarized(self) -> int:
+        """Count relevant signals without a summary."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM processed_signals WHERE is_relevant = true AND summary IS NULL"
+                )
+                return cur.fetchone()[0]
+
+    def update_summary(self, raw_signal_id: str, dedup_key: str, summary: str) -> None:
+        """Update summary for a processed signal and add it to embedding_queue."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "UPDATE processed_signals SET summary = %s WHERE raw_signal_id = %s",
+                    (summary, raw_signal_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO embedding_queue (dedup_key)
+                    VALUES (%s)
+                    ON CONFLICT (dedup_key) DO NOTHING
+                    """,
+                    (dedup_key,),
+                )
 
     def fetch_pending_embeddings(self, limit: int = 256) -> list[dict[str, Any]]:
         """Return processed signals pending embedding, joined with raw_signals metadata."""
@@ -652,15 +690,20 @@ class PostgresStorage:
 
     def has_pending_process_batch(self) -> bool:
         """Return True if a process_batch task is pending or running."""
+        return self.has_pending_task_of_type("process_batch")
+
+    def has_pending_task_of_type(self, task_type: str) -> bool:
+        """Return True if a task of given type is pending or running."""
         with self._conn() as conn:
             with self._cursor(conn) as cur:
                 cur.execute(
                     """
                     SELECT 1 FROM llm_task_queue
-                    WHERE task_type = 'process_batch'
+                    WHERE task_type = %s
                       AND status IN ('pending', 'running')
                     LIMIT 1
-                    """
+                    """,
+                    (task_type,),
                 )
                 return cur.fetchone() is not None
 

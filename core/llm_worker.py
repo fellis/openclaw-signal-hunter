@@ -4,8 +4,9 @@ Processes tasks from llm_task_queue sequentially, one at a time.
 Called by cron (every minute) via skill command 'run_worker'.
 
 Task types and priorities (lower = higher priority):
-  - resolve:       50  - enrich keyword with LLM, create collection plan
-  - process_batch: 90  - LLM classify a batch of unprocessed signals
+  - resolve:          50  - enrich keyword with LLM, create collection plan
+  - process_batch:    90  - embed-classify a batch of raw signals (no LLM)
+  - summarize_batch:  95  - generate summaries for classified signals via LLM
 
 Collection runs via a SEPARATE collect worker cron (cmd_run_collect_worker).
 This worker is LLM-only: no API calls to GitHub/Reddit/HN/SO/HF.
@@ -73,6 +74,17 @@ class LLMWorker:
                     payload={},
                 )
 
+            # Auto-enqueue summarize_batch when relevant signals need summaries
+            if (
+                not self._storage.has_pending_task_of_type("summarize_batch")
+                and self._storage.count_unsummarized() > 0
+            ):
+                self._storage.enqueue_llm_task(
+                    task_type="summarize_batch",
+                    priority=95,
+                    payload={},
+                )
+
             task = self._storage.claim_next_llm_task()
             if not task:
                 break  # queue empty
@@ -88,6 +100,8 @@ class LLMWorker:
                     result = self._handle_resolve(payload)
                 elif task_type == "process_batch":
                     result = self._handle_process_batch()
+                elif task_type == "summarize_batch":
+                    result = self._handle_summarize_batch()
                 else:
                     raise ValueError(f"Unknown task_type: {task_type!r}")
 
@@ -166,6 +180,77 @@ class LLMWorker:
         orch = Orchestrator(self._config, self._storage)
         result = orch.process(router, max_batches=max_batches)
         return result
+
+    def _handle_summarize_batch(self) -> dict[str, Any]:
+        """
+        Generate summaries for relevant signals that were classified without one.
+        Fetches unsummarized signals, calls LLM in small batches, saves results.
+        After saving, add to embedding_queue so Qdrant indexing can proceed.
+        Returns count of summarized signals and remaining count.
+        """
+        from core.llm_router import LLMCall, LLMRouter  # noqa: PLC0415
+        import json  # noqa: PLC0415
+
+        proc_cfg = self._config.get("processor", {})
+        batch_size = int(proc_cfg.get("summary_batch_size", 5))
+        fetch_limit = int(proc_cfg.get("summary_fetch_limit", 50))
+
+        records = self._storage.fetch_unsummarized(limit=fetch_limit)
+        if not records:
+            return {"summarized": 0, "remaining": 0}
+
+        router = self._make_router()
+
+        _SYSTEM = (
+            "You are a concise technical analyst. "
+            "Return ONLY the JSON array, no markdown, no labels."
+        )
+
+        summarized = 0
+        for i in range(0, len(records), batch_size):
+            chunk = records[i : i + batch_size]
+            texts = [r["text"][:600] for r in chunk]
+            items = "\n\n".join(f"[{j}]\n{t}" for j, t in enumerate(texts))
+            prompt = (
+                f"Write a 1-2 sentence summary in English for each of the following "
+                f"{len(texts)} texts. "
+                f"Return a JSON array of strings in the same order, "
+                f'e.g. ["summary0", "summary1"].\n\n{items}\n\nReturn ONLY the JSON array.'
+            )
+            max_tokens = max(512, len(texts) * 150)
+            call = LLMCall(
+                operation="process",
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=0.0,
+            )
+            try:
+                raw = router.complete(call).strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                summaries = json.loads(raw)
+            except Exception:
+                try:
+                    recovered = raw.rstrip(", \n") + '"]'
+                    summaries = json.loads(recovered)
+                except Exception:
+                    log.warning("[llm_worker] summary parse failed for batch %d, skipping", i)
+                    continue
+
+            if not isinstance(summaries, list):
+                continue
+
+            for rec, summary in zip(chunk, summaries):
+                if summary and isinstance(summary, str):
+                    self._storage.update_summary(rec["raw_signal_id"], rec["dedup_key"], summary)
+                    summarized += 1
+
+        remaining = self._storage.count_unsummarized()
+        log.info("[llm_worker] summarized=%d remaining=%d", summarized, remaining)
+        return {"summarized": summarized, "remaining": remaining}
 
     def _make_router(self):
         from core.llm_router import LLMRouter  # noqa: PLC0415
