@@ -1,22 +1,16 @@
 """
 LLM Task Queue Worker.
 Processes tasks from llm_task_queue sequentially, one at a time.
-Called by cron via skill command 'run_worker'.
+Called by cron (every minute) via skill command 'run_worker'.
 
 Task types and priorities (lower = higher priority):
   - resolve:       50  - enrich keyword with LLM, create collection plan
   - process_batch: 90  - LLM classify a batch of unprocessed signals
 
-Collection is NOT in the LLM queue. Instead, the worker spawns independent
-subprocesses (fire & forget) for each stale keyword so the LLM never idles
-waiting for API calls to GitHub/Reddit/HN/SO/HF.
+Collection runs via a SEPARATE collect worker cron (cmd_run_collect_worker).
+This worker is LLM-only: no API calls to GitHub/Reddit/HN/SO/HF.
 
-Worker auto-spawn logic (runs every tick before claiming LLM task):
-  - Up to 3 stale keywords (last_collected_at > 24h or NULL) per tick
-  - Marks last_collected_at = now() immediately (acts as a 24h lock)
-  - Spawn: python -m skill collect_keyword {"keyword": "..."}
-
-Worker guarantees (LLM tasks only):
+Worker guarantees:
   - Only one LLM task runs at a time (has_running_llm_task check)
   - Retries failed tasks up to 3 times before marking as 'failed'
   - Resets tasks stuck in 'running' for > 10 minutes
@@ -26,9 +20,6 @@ Worker guarantees (LLM tasks only):
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
-import sys
 import time
 from typing import Any
 
@@ -64,10 +55,6 @@ class LLMWorker:
         reset = self._storage.reset_stuck_llm_tasks(_MAX_STUCK_MINUTES)
         if reset:
             log.warning("[llm_worker] reset %d stuck task(s)", reset)
-
-        # Spawn collect subprocesses for stale keywords (fire & forget, non-blocking)
-        # Done once per tick outside the LLM loop so LLM never waits for API calls
-        self._spawn_stale_collects()
 
         while time.monotonic() < deadline:
             # Skip if another task is already running (shouldn't happen in loop, but safety check)
@@ -164,36 +151,6 @@ class LLMWorker:
             "auto_approved": bool(plans),
             "sources": list(plans.keys()) if plans else [],
         }
-
-    def _spawn_stale_collects(self, limit: int = 3) -> None:
-        """
-        Spawn background subprocesses for stale keywords (non-blocking).
-        Marks last_collected_at = now() immediately to prevent double-spawning.
-        The subprocess runs collect and updates last_collected_at again on success.
-        """
-        import json as _json  # noqa: PLC0415
-
-        stale = self._storage.get_stale_keywords(min_age_hours=24, limit=limit)
-        if not stale:
-            return
-
-        skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-        for kw in stale:
-            # Lock the keyword for 24h before spawning to prevent re-triggering
-            self._storage.update_keyword_collected_at(kw)
-            try:
-                subprocess.Popen(
-                    [sys.executable, "-m", "skill", "collect_keyword",
-                     _json.dumps({"keyword": kw})],
-                    cwd=skill_dir,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                log.info("[llm_worker] spawned collect subprocess for '%s'", kw)
-            except Exception as e:
-                log.error("[llm_worker] failed to spawn collect for '%s': %s", kw, e)
 
     def _handle_process_batch(self) -> dict[str, Any]:
         """

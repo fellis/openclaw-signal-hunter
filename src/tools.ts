@@ -549,6 +549,30 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
+    // Collect Worker - run collect worker (called by separate cron)
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_run_collect_worker',
+      description:
+        'Collect worker: picks the single stalest keyword (not collected in last 24h) ' +
+        'and fetches new signals for it from GitHub, Reddit, HN, SO, HuggingFace. ' +
+        'No LLM used - pure API calls. Runs independently from the LLM worker. ' +
+        'Called automatically by the collect cron every 5 minutes. ' +
+        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_collect_worker". ' +
+        'User triggers: "запусти collect воркер", "собери сигналы", "run collect worker".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'run_collect_worker');
+        if (!result.success) return text(`Collect worker failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        if (d?.status === 'idle') return text(`Collect worker: all keywords up to date.`);
+        return text(
+          `**Collect done:** ${d?.keyword ?? '?'} - ${d?.total ?? 0} new signals`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
     // LLM Worker - retry failed tasks
     // ----------------------------------------------------------------
     {

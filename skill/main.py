@@ -192,27 +192,36 @@ def cmd_update_plan(json_str: str) -> None:
         _err(str(e))
 
 
-def cmd_collect_keyword(json_str: str) -> None:
+def cmd_run_collect_worker(json_str: str = "{}") -> None:
     """
-    Collect signals for a single keyword from its approved collection plans.
-    Called as a background subprocess by the LLM worker for stale keywords.
-    Updates last_collected_at on completion.
-    """
-    import json as _json  # noqa: PLC0415
-    from core.orchestrator import Orchestrator  # noqa: PLC0415
+    Collect worker: picks the single stalest keyword (not collected in 24h)
+    and collects signals for it. Called by a dedicated collect cron (e.g. every 5 min).
 
-    payload = _json.loads(json_str) if json_str.strip() else {}
-    keyword = payload.get("keyword", "")
-    if not keyword:
-        _err("collect_keyword: missing 'keyword' in payload")
-        return
+    Runs independently from the LLM worker - no GPU/LLM usage.
+    Multiple cron ticks can run concurrently on different keywords safely
+    because last_collected_at is locked before collection starts.
+    """
+    from core.orchestrator import Orchestrator  # noqa: PLC0415
 
     config = _load_config()
     storage = _make_storage()
+
+    stale = storage.get_stale_keywords(min_age_hours=24, limit=1)
+    if not stale:
+        _out({"status": "idle", "note": "All keywords collected within last 24h."})
+        return
+
+    keyword = stale[0]
+    # Lock for 24h before starting - prevents re-trigger if collect takes > 5 min
+    storage.update_keyword_collected_at(keyword)
+
     orch = Orchestrator(config, storage)
     result = orch.collect(keywords=[keyword])
+
+    # Update again with actual completion time
     storage.update_keyword_collected_at(keyword)
-    _out({"status": "done", "phase": "collect", "keyword": keyword, **result})
+
+    _out({"status": "done", "keyword": keyword, **result})
 
 
 def cmd_embed() -> None:
@@ -928,7 +937,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "refresh_profile":          (cmd_refresh_profile, True),
     "approve_plan":             (cmd_approve_plan, True),
     "update_plan":              (cmd_update_plan, True),
-    "collect_keyword":          (cmd_collect_keyword, True),
+    "run_collect_worker":       (cmd_run_collect_worker, False),
     "embed":                    (cmd_embed, False),
     "reprocess":                (cmd_reprocess, True),
     "query":                    (cmd_query, True),
