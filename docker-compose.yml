@@ -90,7 +90,7 @@ services:
   translate-worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.worker
     container_name: signal-hunter-translate-worker
     env_file:
       - .env
