@@ -55,12 +55,14 @@ export default function Charts() {
 
   // Pivot timeline: {day: 'x', source1: n, source2: n, ...}
   const pivotTimeline = (() => {
-    const dayMap: Record<string, Record<string, number>> = {}
+    const dayMap: Record<string, Record<string, string | number>> = {}
     for (const pt of timeline) {
       if (!dayMap[pt.day]) dayMap[pt.day] = { day: pt.day }
       dayMap[pt.day][pt.source_type] = pt.count
     }
-    return Object.values(dayMap).sort((a, b) => a.day.localeCompare(b.day))
+    return Object.values(dayMap).sort((a, b) =>
+      String(a.day).localeCompare(String(b.day)),
+    )
   })()
 
   const allSources = [...new Set(timeline.map(t => t.source_type))]
