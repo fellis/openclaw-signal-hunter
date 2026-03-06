@@ -67,7 +67,7 @@ function CategoryBadge({ name, rules }: { name: string; rules: Rule[] }) {
 // Column header
 // ---------------------------------------------------------------------------
 
-type SortKey = 'rank_score' | 'avg_rank_score' | 'avg_intensity' | 'avg_confidence' | 'count' | 'last_signal_at'
+type SortKey = 'rank_score' | 'avg_rank_score' | 'avg_confidence' | 'count' | 'last_signal_at'
 type SortKeyL3 = 'rank_score' | 'intensity' | 'confidence' | 'score' | 'comments_count' | 'created_at' | 'collected_at'
 
 function SortHeader({
@@ -262,9 +262,6 @@ function ClusterRow({
           <RankBar value={cluster.rank_score} max={maxRankScore} />
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-          {intensityLabel(cluster.avg_intensity)}
-        </td>
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
           {(cluster.avg_confidence * 100).toFixed(0)}%
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
@@ -363,9 +360,6 @@ function CategoryRow({
           <RankBar value={category.rank_score} max={maxRankScore} />
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
-          {intensityLabel(category.avg_intensity)}
-        </td>
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
           {(category.avg_confidence * 100).toFixed(0)}%
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
@@ -455,9 +449,6 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
             </th>
             <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Rank Score (Σ)" col="rank_score" {...colProps} />
-            </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
-              <SortHeader label="Intensity" col="avg_intensity" {...colProps} />
             </th>
             <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Confidence" col="avg_confidence" {...colProps} />
