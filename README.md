@@ -81,7 +81,6 @@ Docker Compose services:
 - Each collector is a self-contained module implementing `BaseCollector`
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
-- Token-aware batching for LLM classification (validated: ~10 signals per batch)
 - **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > summarize_batch(90)
 - **Three separate workers:** Embed Worker (every minute) classifies signals via embeddings (no LLM); LLM Worker (every minute) handles resolve + summarize; Collect Worker (every 5 min) handles API collection - they never block each other
 - **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
@@ -243,8 +242,8 @@ You: show providers
 ClawBot:
 Provider | Type           | Model             | Operations
 ---------|----------------|-------------------|---------------------------
-local    | openai_compat  | devstral          | process, suggest_rules, resolve_enrich
-claude   | anthropic      | claude-sonnet-4-5 | resolve_strategy, query
+local    | openai_compat  | devstral          | summarize, suggest_rules, resolve_enrich
+claude   | anthropic      | claude-haiku-4-5  | resolve_strategy, query
 ```
 
 To route an operation to a different provider:
@@ -378,9 +377,11 @@ You: process
 ```
 ClawBot: Classifying 1688 signals (embed mode)...
 ✓ Done. 1453 classified (relevant: 734, irrelevant: 719)
-  - Classify: embedding cosine similarity (~0.1s/signal)
-  - Summaries: LLM for 734 relevant signals (~1.5s each)
+  - Classify: embedding cosine similarity (~0.1s/signal, no LLM)
+  - Summaries: queued for async generation by LLM Worker
 ```
+
+> In practice you don't need to call `process` manually - the Embed Worker cron handles it automatically every minute.
 
 Embedding happens automatically via the cron job (every 10 minutes). To run immediately:
 
@@ -591,9 +592,12 @@ Key sections:
   "processor": {
     "mode": "embed",
     "relevance_threshold": 0.40,
-    "rule_threshold": 0.42,
+    "rule_threshold": 0.50,
     "embed_batch_size": 32,
     "summary_batch_size": 5,
+    "summary_fetch_limit": 50,
+    "batch_size": 50,
+    "max_batches_per_run": 5,
     "max_body_chars": 1000
   },
   "embedder": {
@@ -624,12 +628,17 @@ Key sections:
 }
 ```
 
+> **Note:** `llm_routing.process` is only used when `mode: "llm"` (fallback). In `embed` mode classification is done by cosine similarity - no LLM call for classify at all.
+
 **`processor` settings explained:**
 - `mode: "embed"` - use embedding cosine similarity for classify + LLM for summary only. Set to `"llm"` to revert to full LLM classification.
-- `relevance_threshold: 0.40` - minimum cosine similarity to consider a signal relevant (validated F1=94.7%).
-- `rule_threshold: 0.42` - minimum similarity to assign a rule to a signal (per-rule recall 90-100%).
+- `relevance_threshold: 0.40` - minimum cosine similarity to a signal to even consider it. Signal is only marked relevant if it also matches at least one rule (see below).
+- `rule_threshold: 0.50` - minimum similarity to assign a rule to a signal. A signal is `is_relevant=true` only if at least one rule passes this threshold - prevents generic on-topic content without a concrete category from flooding the feed.
 - `embed_batch_size: 32` - signals per embedder HTTP call during classify.
-- `summary_batch_size: 5` - relevant signals per LLM summary call.
+- `summary_batch_size: 5` - relevant signals per LLM call in summarize_batch worker.
+- `summary_fetch_limit: 50` - signals fetched per summarize_batch worker tick.
+- `batch_size: 50` - raw signals fetched per Embed Worker batch.
+- `max_batches_per_run: 5` - max batches the Embed Worker processes per cron tick (50 × 5 = 250 signals/min max).
 
 **`embedder` settings explained:**
 - `service_url` - HTTP endpoint of the embedder Docker container. If unreachable, falls back to loading bge-m3 locally.
@@ -664,7 +673,7 @@ PostgreSQL tables:
 | Table | Purpose |
 |---|---|
 | `raw_signals` | Collected posts/issues/threads |
-| `processed_signals` | LLM classification results |
+| `processed_signals` | Embedding classification results (is_relevant, matched_rules, confidence, intensity, summary) |
 | `embedding_queue` | Outbox: pending Qdrant upserts |
 | `collection_cursors` | Incremental collection state per target |
 | `keyword_profiles` | Discovered + enriched keyword metadata (`last_collected_at` tracks daily collect) |
