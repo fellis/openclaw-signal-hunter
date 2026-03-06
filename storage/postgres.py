@@ -696,12 +696,16 @@ class PostgresStorage:
             with self._cursor(conn) as cur:
                 cur.execute(
                     """
-                    SELECT DISTINCT kp.canonical_name
+                    SELECT kp.canonical_name, kp.last_collected_at
                     FROM keyword_profiles kp
-                    JOIN keyword_collection_plans kcp
-                        ON kcp.canonical_name = kp.canonical_name
-                    WHERE kp.last_collected_at IS NULL
-                       OR kp.last_collected_at < now() - (%s || ' hours')::interval
+                    WHERE (
+                        kp.last_collected_at IS NULL
+                        OR kp.last_collected_at < now() - (%s || ' hours')::interval
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM keyword_collection_plans kcp
+                        WHERE kcp.canonical_name = kp.canonical_name
+                    )
                     ORDER BY kp.last_collected_at ASC NULLS FIRST
                     LIMIT %s
                     """,
