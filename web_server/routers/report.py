@@ -49,10 +49,40 @@ def _parse_matched_rules(raw: Any) -> list[dict]:
     return []
 
 
+# Priority order for deduplication: more specific categories win over broader ones.
+# When a signal matches multiple categories with equal confidence, the one with
+# the lowest priority index is selected as the primary category.
+# Result: feature_request, security, cost etc. "steal" signals from the
+# catch-all pain_point bucket, keeping each signal in exactly one category.
+_RULE_PRIORITY: dict[str, int] = {
+    "feature_request_ai_agent": 0,   # explicit ask - most specific
+    "security_ai_agent":        1,   # security concern
+    "cost_ai_agent":            2,   # cost concern
+    "integration_ai_agent":     3,   # integration issue
+    "customization_ai_agent":   4,   # customization need
+    "comparison_ai_agent":      5,   # comparison / evaluation
+    "adoption_ai_agent":        6,   # adoption barrier
+    "pain_point_ai_agent":      7,   # general pain - catch-all
+}
+_RULE_PRIORITY_DEFAULT = 99
+
+
 def _primary_rule(matched_rules: list[dict]) -> str:
-    if matched_rules:
-        return matched_rules[0].get("rule_name") or "uncategorized"
-    return "uncategorized"
+    """
+    Select the single best category for a signal that matched multiple rules.
+    Uses explicit priority so that specific categories (feature_request, security,
+    cost) take precedence over the broad pain_point catch-all.
+    Falls back to the first rule in the list for unknown rule names.
+    """
+    if not matched_rules:
+        return "uncategorized"
+    best = min(
+        matched_rules,
+        key=lambda r: _RULE_PRIORITY.get(
+            r.get("rule_name", ""), _RULE_PRIORITY_DEFAULT
+        ),
+    )
+    return best.get("rule_name") or "uncategorized"
 
 
 def _build_where(
