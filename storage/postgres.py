@@ -304,9 +304,9 @@ class PostgresStorage:
         with self._conn() as conn:
             with self._cursor(conn) as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM processed_signals WHERE is_relevant = true AND summary IS NULL"
+                    "SELECT COUNT(*) AS n FROM processed_signals WHERE is_relevant = true AND summary IS NULL"
                 )
-                return cur.fetchone()[0]
+                return cur.fetchone()["n"]
 
     def update_summary(self, raw_signal_id: str, dedup_key: str, summary: str) -> None:
         """Update summary for a processed signal and add it to embedding_queue."""
