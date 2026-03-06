@@ -36,6 +36,20 @@ _SOURCE_ORDER = [
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _parse_keywords(raw: Any) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(k) for k in raw]
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return [str(k) for k in parsed] if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
+
+
 def _parse_matched_rules(raw: Any) -> list[dict]:
     if not raw:
         return []
@@ -310,7 +324,7 @@ async def get_clusters(
     if cached_names is not None:
         cluster_names = cached_names
     else:
-        cluster_names = name_clusters(clusters, titles_by_id)
+        cluster_names = name_clusters(clusters, titles_by_id, parent_category=category)
         cache.set("cluster_names", cluster_key, value=cluster_names, ttl=86400)
 
     # Build cluster response
@@ -386,7 +400,8 @@ async def get_signals(
             p.intensity,
             p.confidence::float,
             p.language,
-            p.matched_rules
+            p.matched_rules,
+            p.keywords_matched
         FROM raw_signals r
         JOIN processed_signals p ON p.raw_signal_id = r.id
         WHERE r.id = ANY(%s::uuid[])
@@ -416,6 +431,7 @@ async def get_signals(
             "confidence": row["confidence"],
             "language": row["language"],
             "matched_rules": rule_names,
+            "keywords": _parse_keywords(row.get("keywords_matched")),
         })
 
     # Apply sorting

@@ -44,6 +44,7 @@ export interface Signal {
   confidence: number
   language: string
   matched_rules: string[]
+  keywords: string[]
 }
 
 export interface SearchResult extends Signal {

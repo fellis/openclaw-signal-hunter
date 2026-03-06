@@ -122,6 +122,19 @@ function SignalRow({ signal }: { signal: Signal }) {
                 {signal.summary}
               </p>
             )}
+            {signal.keywords && signal.keywords.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {signal.keywords.slice(0, 4).map(kw => (
+                  <span
+                    key={kw}
+                    className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-medium"
+                    style={{ background: 'var(--bg-3)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}
+                  >
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </td>

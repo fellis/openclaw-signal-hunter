@@ -281,9 +281,11 @@ def get_clustering_strategy(name: str | None = None) -> ClusteringStrategy:
 def name_clusters(
     clusters: dict[int, list[str]],
     titles_by_id: dict[str, str],
+    parent_category: str | None = None,
 ) -> dict[int, str]:
     """
     Generate descriptive names for all clusters using the local LLM.
+    parent_category is passed as context so the LLM avoids repeating it in labels.
     Falls back to first signal title on any error.
     Returns {cluster_id: name}.
     """
@@ -304,9 +306,22 @@ def name_clusters(
         snippet = " | ".join(samples) if samples else "(no titles)"
         lines.append(f"{cid} ({len(sids)} signals): {snippet}")
 
+    # Build context hint so the LLM generates specific sub-topic names
+    # instead of repeating the parent category (e.g. "AI Agent X" inside
+    # the "pain_point_ai_agent" category).
+    category_hint = ""
+    if parent_category:
+        readable = parent_category.replace("_", " ").title()
+        category_hint = (
+            f"These clusters are all sub-topics within the parent category: \"{readable}\".\n"
+            f"Do NOT repeat the parent category name in your labels. "
+            f"Focus on what makes each cluster DISTINCT within that category.\n"
+        )
+
     prompt = (
         "You are a concise topic labeler. Name each cluster with a short label (2-5 words, English).\n"
-        "The label must capture the main theme. Return ONLY valid JSON.\n\n"
+        + category_hint +
+        "The label must capture the specific theme. Return ONLY valid JSON.\n\n"
         "Clusters:\n" + "\n".join(lines) + "\n\n"
         'Format: {"0": "label", "1": "label", ...}'
     )
