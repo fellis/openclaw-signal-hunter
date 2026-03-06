@@ -325,14 +325,23 @@ def name_clusters(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=512,
+            max_tokens=1024,
         )
         text = response.choices[0].message.content.strip()
+        finish = response.choices[0].finish_reason
+        if finish == "length":
+            log.warning("[clustering] LLM response truncated (max_tokens too low?) - trying partial parse")
+            # Try to salvage partial JSON by closing the object
+            text = text.rstrip().rstrip(",") + "}"
+
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
-            raw = json.loads(text[start:end])
-            return {int(k): str(v) for k, v in raw.items()}
+            try:
+                raw = json.loads(text[start:end])
+                return {int(k): str(v) for k, v in raw.items()}
+            except json.JSONDecodeError as parse_err:
+                log.warning("[clustering] LLM JSON parse failed: %s", parse_err)
     except Exception as e:
         log.warning("[clustering] LLM naming failed: %s", e)
 
