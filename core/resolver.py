@@ -21,6 +21,10 @@ from storage.postgres import PostgresStorage
 
 log = logging.getLogger(__name__)
 
+# Max characters per string field in discovery data sent to LLM.
+# Prevents oversized prompts when repos have README-length descriptions.
+_DISCOVERY_MAX_STR_LEN = 1000
+
 _ENRICH_SYSTEM = """You are an AI market intelligence assistant.
 You analyze a keyword and discovery facts from platforms, then classify and enrich the keyword profile.
 Always respond with valid JSON only."""
@@ -124,7 +128,7 @@ class KeywordResolver:
     ) -> KeywordProfile:
         """Ask LLM to classify and enrich the keyword based on discovery facts."""
         discovery_summary = self._discovery_summary(discovered)
-        prompt = self._build_enrich_prompt(keyword, discovery_summary)
+        prompt = self._build_enrich_prompt(keyword, self._slim_for_llm(discovery_summary))
 
         call = LLMCall(
             operation="resolve_enrich",
@@ -218,6 +222,24 @@ Return ONLY the JSON object, no markdown, no explanation.
             name: dataclasses.asdict(resources)
             for name, resources in discovered.items()
         }
+
+    @staticmethod
+    def _slim_for_llm(summary: dict[str, Any]) -> dict[str, Any]:
+        """
+        Truncate string fields to _DISCOVERY_MAX_STR_LEN before sending to LLM.
+        Prevents oversized prompts when repos have README-length descriptions.
+        Full data is preserved in _discovery_summary for build_plan and storage.
+        """
+        def _truncate(obj: Any) -> Any:
+            if isinstance(obj, str):
+                return obj[:_DISCOVERY_MAX_STR_LEN] if len(obj) <= _DISCOVERY_MAX_STR_LEN else obj[:_DISCOVERY_MAX_STR_LEN] + "..."
+            if isinstance(obj, list):
+                return [_truncate(item) for item in obj]
+            if isinstance(obj, dict):
+                return {k: _truncate(v) for k, v in obj.items()}
+            return obj
+
+        return _truncate(summary)
 
     @staticmethod
     def _profile_to_proposal(cached_data: dict[str, Any]) -> dict[str, Any]:
