@@ -154,14 +154,17 @@ class LLMWorker:
 
     def _handle_process_batch(self) -> dict[str, Any]:
         """
-        Run one LLM classification batch (max_batches=1).
+        Run classification batches up to config.processor.max_batches_per_run.
+        With embed mode each batch is fast (~10-60s), so multiple batches fit
+        within the worker time budget. Default: 3 batches per task.
         Returns count of classified signals and remaining count.
         """
         from core.orchestrator import Orchestrator  # noqa: PLC0415
 
+        max_batches = self._config.get("processor", {}).get("max_batches_per_run", 3)
         router = self._make_router()
         orch = Orchestrator(self._config, self._storage)
-        result = orch.process(router, max_batches=1)
+        result = orch.process(router, max_batches=max_batches)
         return result
 
     def _make_router(self):
