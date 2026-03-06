@@ -261,6 +261,7 @@ function ClusterRow({
         <td className="pr-4 py-2.5">
           <RankBar value={cluster.rank_score} max={maxRankScore} />
         </td>
+        <td className="pr-4 py-2.5" />
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
           {(cluster.avg_confidence * 100).toFixed(0)}%
         </td>
@@ -359,6 +360,7 @@ function CategoryRow({
         <td className="pr-4 py-2.5">
           <RankBar value={category.rank_score} max={maxRankScore} />
         </td>
+        <td className="pr-4 py-2.5" />
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
           {(category.avg_confidence * 100).toFixed(0)}%
         </td>
