@@ -1,180 +1,183 @@
 """
 Translation Worker.
 
-Runs as a standalone loop process (translate_worker container).
-Translates title + summary of relevant, embedded signals to Russian.
-Stores results in signal_translations table (signal_id, lang, field, text).
+Translates title + summary of relevant, embedded signals to the target language.
+Stores results in signal_translations (signal_id, lang, field, text).
 
-Flow:
-  1. Find processed_signals that are relevant, have a summary,
-     are embedded (embedding_queue status=done), and have no 'ru' translation yet.
-  2. Batch up to BATCH_SIZE signals.
-  3. Send title batch + summary batch to translator microservice.
-  4. Upsert rows into signal_translations.
-  5. Sleep POLL_INTERVAL seconds and repeat.
+Called by cron via skill command 'run_translate_worker'.
+One cron tick = one batch of BATCH_SIZE signals.
+
+Skips signals already in the target language (no RU->RU or EN->EN translation).
+Skips signals that already have a translation row for the target language.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import time
 from typing import Any
 
 import httpx
-import psycopg2
-import psycopg2.extras
 
 log = logging.getLogger(__name__)
 
-DATABASE_URL   = os.environ.get("DATABASE_URL", "postgresql://signal:signal@postgres:5432/signal_hunter")
-TRANSLATOR_URL = os.environ.get("TRANSLATOR_URL", "http://10.10.10.4:6340")
-TRANSLATOR_API_KEY = os.environ.get("TRANSLATOR_API_KEY", "")
-TARGET_LANG    = os.environ.get("TARGET_LANG", "ru")
-BATCH_SIZE     = int(os.environ.get("BATCH_SIZE", "32"))
-POLL_INTERVAL  = int(os.environ.get("POLL_INTERVAL", "30"))
+TRANSLATOR_URL    = os.environ.get("TRANSLATOR_URL", "https://llm.aegisalpha.io/translator")
+TRANSLATOR_API_KEY = os.environ.get("LOCAL_LLM_API_KEY", "")
+TARGET_LANG       = os.environ.get("TRANSLATE_TARGET_LANG", "ru")
+BATCH_SIZE        = int(os.environ.get("TRANSLATE_BATCH_SIZE", "32"))
 
 
-def _get_conn() -> Any:
-    return psycopg2.connect(DATABASE_URL)
-
-
-def _fetch_pending(conn: Any, batch: int) -> list[dict]:
+class TranslateWorker:
     """
-    Fetch signals that need translation:
-    - relevant, have summary, are embedded
-    - no translation row yet for TARGET_LANG
+    Single-batch translation worker.
+    Called once per cron tick via cmd_run_translate_worker.
     """
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT
-                r.id        AS signal_id,
-                r.title,
-                p.summary
-            FROM processed_signals p
-            JOIN raw_signals r       ON r.id = p.raw_signal_id
-            JOIN embedding_queue eq  ON eq.dedup_key = p.dedup_key
-            WHERE p.is_relevant  = true
-              AND p.summary       IS NOT NULL
-              AND eq.status       = 'done'
-              AND (p.language IS NULL OR p.language != %s)
-              AND NOT EXISTS (
-                  SELECT 1 FROM signal_translations st
-                  WHERE st.signal_id = r.id AND st.lang = %s
-              )
-            ORDER BY p.rank_score DESC NULLS LAST
-            LIMIT %s
-            """,
-            (TARGET_LANG, TARGET_LANG, batch),
-        )
-        return [dict(r) for r in cur.fetchall()]
 
+    def __init__(self, storage: Any) -> None:
+        self._url = storage._url
 
-def _translate_batch(texts: list[str]) -> list[str]:
-    """Call translator microservice; return translated strings in same order."""
-    texts = [t or "" for t in texts]
-    non_empty = [(i, t) for i, t in enumerate(texts) if t.strip()]
-    if not non_empty:
-        return texts[:]
-
-    indices, payloads = zip(*non_empty)
-    headers = {}
-    if TRANSLATOR_API_KEY:
-        headers["Authorization"] = f"Bearer {TRANSLATOR_API_KEY}"
-    resp = httpx.post(
-        f"{TRANSLATOR_URL}/translate",
-        json={"texts": list(payloads), "target_lang": TARGET_LANG},
-        headers=headers,
-        timeout=120.0,
-    )
-    resp.raise_for_status()
-    translated = resp.json()["translations"]
-
-    result = list(texts)
-    for idx, tr in zip(indices, translated):
-        result[idx] = tr
-    return result
-
-
-def _upsert_translations(conn: Any, rows: list[tuple]) -> None:
-    """
-    rows: list of (signal_id, lang, field, text)
-    Uses ON CONFLICT to upsert.
-    """
-    with conn.cursor() as cur:
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO signal_translations (signal_id, lang, field, text)
-            VALUES %s
-            ON CONFLICT (signal_id, lang, field) DO UPDATE SET text = EXCLUDED.text, created_at = now()
-            """,
-            rows,
-        )
-    conn.commit()
-
-
-def run_once(conn: Any) -> int:
-    """Process one batch. Returns number of signals translated."""
-    signals = _fetch_pending(conn, BATCH_SIZE)
-    if not signals:
-        return 0
-
-    ids     = [str(s["signal_id"]) for s in signals]
-    titles  = [s["title"] or "" for s in signals]
-    summaries = [s["summary"] or "" for s in signals]
-
-    log.info("[translate_worker] translating %d signals -> %s", len(signals), TARGET_LANG)
-
-    try:
-        translated_titles   = _translate_batch(titles)
-        translated_summaries = _translate_batch(summaries)
-    except Exception as exc:
-        log.error("[translate_worker] translator call failed: %s", exc)
-        return 0
-
-    rows: list[tuple] = []
-    for sid, tt, ts in zip(ids, translated_titles, translated_summaries):
-        if tt.strip():
-            rows.append((sid, TARGET_LANG, "title", tt))
-        if ts.strip():
-            rows.append((sid, TARGET_LANG, "summary", ts))
-
-    if rows:
-        _upsert_translations(conn, rows)
-        log.info("[translate_worker] stored %d translation rows for %d signals", len(rows), len(signals))
-
-    return len(signals)
-
-
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    log.info("[translate_worker] starting. target_lang=%s batch=%d poll=%ds",
-             TARGET_LANG, BATCH_SIZE, POLL_INTERVAL)
-
-    conn: Any = None
-    while True:
+    def run(self) -> dict[str, Any]:
+        """
+        Translate one batch of signals.
+        Returns summary dict: status, translated, remaining.
+        """
+        import psycopg2  # noqa: PLC0415
+        conn = psycopg2.connect(self._url)
         try:
-            if conn is None or conn.closed:
-                conn = _get_conn()
+            return self._run(conn)
+        finally:
+            conn.close()
 
-            done = run_once(conn)
-            if done == 0:
-                log.debug("[translate_worker] idle, sleeping %ds", POLL_INTERVAL)
-            time.sleep(POLL_INTERVAL if done == 0 else 1)
+    def _run(self, conn: Any) -> dict[str, Any]:
+        signals = self._fetch_pending(conn)
 
-        except psycopg2.OperationalError as exc:
-            log.warning("[translate_worker] db connection lost: %s - reconnecting", exc)
-            conn = None
-            time.sleep(5)
+        if not signals:
+            return {"status": "idle", "note": "No signals pending translation."}
+
+        log.info("[translate_worker] translating %d signals -> %s", len(signals), TARGET_LANG)
+
+        titles    = [s["title"] or "" for s in signals]
+        summaries = [s["summary"] or "" for s in signals]
+
+        try:
+            translated_titles    = self._translate_batch(titles)
+            translated_summaries = self._translate_batch(summaries)
         except Exception as exc:
-            log.error("[translate_worker] unexpected error: %s", exc, exc_info=True)
-            time.sleep(10)
+            log.error("[translate_worker] translator call failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
 
+        rows: list[tuple] = []
+        for s, tt, ts in zip(signals, translated_titles, translated_summaries):
+            sid = str(s["signal_id"])
+            if tt.strip():
+                rows.append((sid, TARGET_LANG, "title", tt))
+            if ts.strip():
+                rows.append((sid, TARGET_LANG, "summary", ts))
 
-if __name__ == "__main__":
-    main()
+        if rows:
+            self._upsert(conn, rows)
+
+        remaining = self._count_pending(conn)
+        log.info("[translate_worker] stored %d rows, remaining ~%d", len(rows), remaining)
+        return {
+            "status": "done",
+            "translated": len(signals),
+            "rows_stored": len(rows),
+            "remaining": remaining,
+        }
+
+    # ------------------------------------------------------------------
+    # DB helpers
+    # ------------------------------------------------------------------
+
+    def _fetch_pending(self, conn: Any) -> list[dict]:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    r.id        AS signal_id,
+                    r.title,
+                    p.summary
+                FROM processed_signals p
+                JOIN raw_signals r       ON r.id = p.raw_signal_id
+                JOIN embedding_queue eq  ON eq.dedup_key = p.dedup_key
+                WHERE p.is_relevant  = true
+                  AND p.summary       IS NOT NULL
+                  AND eq.status       = 'done'
+                  AND (p.language IS NULL OR p.language != %s)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM signal_translations st
+                      WHERE st.signal_id = r.id AND st.lang = %s
+                  )
+                ORDER BY p.rank_score DESC NULLS LAST
+                LIMIT %s
+                """,
+                (TARGET_LANG, TARGET_LANG, BATCH_SIZE),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def _count_pending(self, conn: Any) -> int:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM processed_signals p
+                JOIN raw_signals r      ON r.id = p.raw_signal_id
+                JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key
+                WHERE p.is_relevant = true
+                  AND p.summary IS NOT NULL
+                  AND eq.status = 'done'
+                  AND (p.language IS NULL OR p.language != %s)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM signal_translations st
+                      WHERE st.signal_id = r.id AND st.lang = %s
+                  )
+                """,
+                (TARGET_LANG, TARGET_LANG),
+            )
+            return cur.fetchone()[0]
+
+    def _upsert(self, conn: Any, rows: list[tuple]) -> None:
+        with conn.cursor() as cur:
+            from psycopg2.extras import execute_values  # noqa: PLC0415
+            execute_values(
+                cur,
+                """
+                INSERT INTO signal_translations (signal_id, lang, field, text)
+                VALUES %s
+                ON CONFLICT (signal_id, lang, field)
+                DO UPDATE SET text = EXCLUDED.text, created_at = now()
+                """,
+                rows,
+            )
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # Translation API
+    # ------------------------------------------------------------------
+
+    def _translate_batch(self, texts: list[str]) -> list[str]:
+        texts = [t or "" for t in texts]
+        non_empty = [(i, t) for i, t in enumerate(texts) if t.strip()]
+        if not non_empty:
+            return texts[:]
+
+        indices, payloads = zip(*non_empty)
+        headers = {"Content-Type": "application/json"}
+        if TRANSLATOR_API_KEY:
+            headers["Authorization"] = f"Bearer {TRANSLATOR_API_KEY}"
+
+        resp = httpx.post(
+            f"{TRANSLATOR_URL}/translate",
+            json={"texts": list(payloads), "target_lang": TARGET_LANG},
+            headers=headers,
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        translated = resp.json()["translations"]
+
+        result = list(texts)
+        for idx, tr in zip(indices, translated):
+            result[idx] = tr
+        return result

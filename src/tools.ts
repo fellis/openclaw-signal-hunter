@@ -574,6 +574,31 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
+    // Translate Worker - translate signals to target language (called by cron)
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_run_translate_worker',
+      description:
+        'Translate worker: translates title + summary of embedded signals to Russian via MADLAD-400. ' +
+        'Processes one batch per cron tick (32 signals). Skips signals already in target language. ' +
+        'Stores results in signal_translations table for instant EN/RU switching in the UI. ' +
+        'Called automatically by cron every 5 minutes. ' +
+        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_translate_worker". ' +
+        'User triggers: "переведи сигналы", "запусти перевод", "run translate worker".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'run_translate_worker');
+        if (!result.success) return text(`Translate worker failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        if (d?.status === 'idle') return text(`Translate worker: no signals pending translation.`);
+        if (d?.status === 'error') return text(`Translate worker error: ${d?.error}`);
+        return text(
+          `**Translate done:** translated=${d?.translated ?? 0} signals, rows=${d?.rows_stored ?? 0}, remaining=${d?.remaining ?? 0}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
     // Collect Worker - run collect worker (called by separate cron)
     // ----------------------------------------------------------------
     {
