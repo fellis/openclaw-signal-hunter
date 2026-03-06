@@ -205,11 +205,20 @@ class Embedder:
 
         primary_rule = matched_rules[0].get("rule_name") if matched_rules else None
 
+        keywords = row.get("keywords_matched") or []
+        if isinstance(keywords, str):
+            import json as _json  # noqa: PLC0415
+            keywords = _json.loads(keywords) if keywords.startswith("[") else []
+
         return {
             "rule": primary_rule,
             "matched_rules": [r.get("rule_name") for r in matched_rules if isinstance(r, dict)],
             "intensity": row.get("intensity"),
             "rank_score": float(row.get("rank_score") or 0),
+            "confidence": float(row.get("confidence") or 0),
+            "language": row.get("language") or "en",
+            "source_type": row.get("source_type") or "",
+            "keywords": keywords if isinstance(keywords, list) else [],
             "url": row.get("url"),
             "title": row.get("title"),
             "date": date_str,

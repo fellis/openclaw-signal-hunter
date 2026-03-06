@@ -338,8 +338,12 @@ class PostgresStorage:
                         p.matched_rules,
                         p.intensity,
                         p.rank_score,
+                        p.confidence,
+                        p.language,
+                        p.keywords_matched,
                         r.url,
                         r.title,
+                        r.source AS source_type,
                         r.created_at,
                         eq.id AS queue_id
                     FROM embedding_queue eq

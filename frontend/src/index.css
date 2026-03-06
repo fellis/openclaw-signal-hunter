@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: #ffffff;
+    --bg-2: #f4f4f5;
+    --bg-3: #e4e4e7;
+    --border: #e4e4e7;
+    --border-2: #d4d4d8;
+    --text: #09090b;
+    --text-2: #3f3f46;
+    --text-muted: #71717a;
+    --accent: #5E6AD2;
+    --accent-hover: #4F58C4;
+  }
+
+  .dark {
+    --bg: #0b0b0c;
+    --bg-2: #111113;
+    --bg-3: #1c1c1f;
+    --border: #27272a;
+    --border-2: #3f3f46;
+    --text: #fafafa;
+    --text-2: #d4d4d8;
+    --text-muted: #71717a;
+    --accent: #6B7AE8;
+    --accent-hover: #5E6AD2;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-2);
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+           transition-colors cursor-pointer border;
+  }
+  .btn-primary {
+    @apply bg-accent text-white border-accent/80 hover:bg-accent-hover;
+  }
+  .btn-ghost {
+    @apply bg-transparent border-transparent text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text)];
+  }
+  .btn-outline {
+    @apply bg-transparent border-[var(--border)] text-[var(--text-2)] hover:bg-[var(--bg-3)];
+  }
+
+  .table-row-hover {
+    @apply hover:bg-[var(--bg-2)] transition-colors;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-medium;
+  }
+
+  .input {
+    @apply w-full px-3 py-1.5 rounded-md text-sm border border-[var(--border)]
+           bg-[var(--bg-2)] text-[var(--text)] placeholder-[var(--text-muted)]
+           focus:outline-none focus:ring-1 focus:ring-[var(--accent)] focus:border-[var(--accent)];
+  }
+}
