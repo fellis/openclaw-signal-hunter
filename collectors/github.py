@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -376,13 +377,20 @@ class GitHubCollector(BaseCollector):
 
         return signals, self._make_cursor(query, newest)
 
+    @staticmethod
+    def _meaningful_body(body: str) -> bool:
+        """Return True if body contains meaningful text beyond URLs and whitespace."""
+        # Strip all URLs, then check if anything meaningful remains
+        stripped = re.sub(r'https?://\S+', '', body).strip()
+        return bool(stripped)
+
     def _issue_to_signal(self, item: dict, keyword: str = "") -> RawSignal | None:
         """
         Convert a GitHub issue JSON dict to a RawSignal.
 
         Returns None (skip) when any of the following is true:
         - Issue has a noise label (invalid, spam, duplicate, wontfix, stale, ...)
-        - Body is empty AND reactions == 0 AND comments <= 1
+        - Body has no meaningful content (empty or URL-only) AND no reactions AND comments <= 1
         - A keyword is given and it does not appear in title or body (case-insensitive)
         """
         try:
@@ -394,12 +402,14 @@ class GitHubCollector(BaseCollector):
 
             title = item.get("title", "")
             body = item.get("body") or ""
-            reactions = item.get("reactions", {}).get("total_count", 0)
+            # Handle null reactions from GitHub API gracefully
+            reactions = (item.get("reactions") or {}).get("total_count", 0)
             comments = item.get("comments", 0)
 
-            # Filter 2: empty / low-signal content
-            if not body.strip() and reactions == 0 and comments <= 1:
-                log.debug("[github] skip empty low-signal issue: %s", title)
+            # Filter 2: no meaningful content + no engagement
+            # Body is considered empty if it contains only whitespace or bare URLs
+            if not self._meaningful_body(body) and not reactions and comments <= 1:
+                log.debug("[github] skip empty/url-only low-signal issue: %s", title)
                 return None
 
             # Filter 3: keyword relevance - keyword must appear in title or body

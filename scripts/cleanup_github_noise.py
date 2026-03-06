@@ -3,11 +3,10 @@ One-time cleanup: remove GitHub issues that don't pass the new quality filters.
 
 Removed if ANY of the following is true:
   1. Has a noise label: invalid, spam, duplicate, wontfix, stale, ...
-  2. Empty body AND reactions == 0 AND comments <= 1
+  2. Body has no meaningful content (empty or URL-only) AND no reactions AND comments <= 1
 
-Keyword-in-text filter is NOT applied retroactively because:
-  - keywords are stored in extra->>'keywords' (not always populated in old records)
-  - it's hard to retroactively determine which keyword brought in which repo
+"Meaningful content" means text that remains after stripping all URLs.
+An issue whose body is only a GitHub permalink (e.g., code reference) is treated as empty.
 
 Run inside the web-report container:
   docker exec signal-hunter-web-report-1 python3 /app/scripts/cleanup_github_noise.py
@@ -22,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 
 import psycopg2
@@ -48,6 +48,12 @@ def uuid_to_qdrant_id(raw_signal_id: str) -> int:
     """Same hash as embedder.py - must stay in sync."""
     h = hashlib.sha256(str(raw_signal_id).encode()).digest()
     return int.from_bytes(h[:8], "big")
+
+
+def _meaningful_body(body: str) -> bool:
+    """Return True if body has meaningful text beyond URLs and whitespace."""
+    stripped = re.sub(r'https?://\S+', '', body).strip()
+    return bool(stripped)
 
 
 def find_noise_ids(cur: psycopg2.extensions.cursor) -> list[str]:
@@ -85,14 +91,15 @@ def find_noise_ids(cur: psycopg2.extensions.cursor) -> list[str]:
             reasons["noise_label"] += 1
             continue
 
-        # Filter 2: empty + low engagement
+        # Filter 2: no meaningful content + no engagement
+        # Body is empty or URL-only AND score == 0 AND comments <= 1
         body_str = body or ""
-        if not body_str.strip() and (score or 0) == 0 and (comments or 0) <= 1:
+        if not _meaningful_body(body_str) and not (score or 0) and (comments or 0) <= 1:
             noise_ids.append(rid)
             reasons["empty_low_signal"] += 1
 
     log.info(
-        "Found %d noise signals: %d noise-label, %d empty/low-signal",
+        "Found %d noise signals: %d noise-label, %d empty/url-only low-signal",
         len(noise_ids), reasons["noise_label"], reasons["empty_low_signal"],
     )
     return noise_ids
