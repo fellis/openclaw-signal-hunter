@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import React, { useState, useCallback } from 'react'
 import { ChevronRight, ExternalLink, Loader2 } from 'lucide-react'
 import { cn, formatRelative, SOURCE_LABELS, CATEGORY_COLORS, SOURCE_COLORS, intensityLabel } from '@/lib/utils'
 import { fetchClusters, fetchSignals } from '@/api/report'
@@ -158,15 +158,11 @@ function SignalRow({ signal }: { signal: Signal }) {
       <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
         {signal.comments_count}
       </td>
-      <td className="pr-4 py-2.5" style={{ whiteSpace: 'nowrap' }}>
-        <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
-          {formatRelative(signal.created_at)}
-        </div>
-        {signal.collected_at && (
-          <div className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-            col. {formatRelative(signal.collected_at)}
-          </div>
-        )}
+      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        {formatRelative(signal.created_at)}
+      </td>
+      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+        {formatRelative(signal.collected_at)}
       </td>
     </tr>
   )
@@ -247,7 +243,8 @@ function ClusterRow({
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
           {cluster.avg_comments.toFixed(0)}
         </td>
-        <td className="pr-4 py-2.5 text-xs" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-2.5" />
+        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(cluster.last_signal_at)}
         </td>
       </tr>
@@ -343,7 +340,8 @@ function CategoryRow({
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
           {category.avg_comments.toFixed(0)}
         </td>
-        <td className="pr-4 py-2.5 text-xs" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-2.5" />
+        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(category.last_signal_at)}
         </td>
       </tr>
@@ -395,40 +393,51 @@ export default function SignalTable({ categories, filters }: TableProps) {
 
   const colProps = { sortBy, sortDir, onSort: handleSort }
 
+  const thStyle: React.CSSProperties = {
+    position: 'sticky',
+    top: 0,
+    background: 'var(--bg-2)',
+    zIndex: 10,
+    borderBottom: '1px solid var(--border)',
+  }
+
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
       <table className="w-full border-collapse">
         <thead>
-          <tr className="border-b" style={{ borderColor: 'var(--border)', background: 'var(--bg-2)' }}>
-            <th className="w-0 pl-4 py-2.5" />
-            <th className="text-left pl-0 pr-4 py-2.5" style={{ minWidth: 320 }}>
+          <tr>
+            <th className="w-0 pl-4 py-2.5" style={thStyle} />
+            <th className="text-left pl-0 pr-4 py-2.5" style={{ ...thStyle, minWidth: 320 }}>
               <SortHeader label="Category / Cluster / Signal" col="count" {...colProps} />
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
                 Sources
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Rank Score (Σ)" col="rank_score" {...colProps} />
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Intensity" col="avg_intensity" {...colProps} />
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Confidence" col="avg_confidence" {...colProps} />
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
                 Avg Score
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
                 Avg Comments
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5">
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
+              <SortHeader label="Created" col="last_signal_at" {...colProps} />
+            </th>
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Collected" col="last_signal_at" {...colProps} />
             </th>
           </tr>
