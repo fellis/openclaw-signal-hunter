@@ -162,9 +162,9 @@ function SignalRow({ signal }: { signal: Signal }) {
         <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
           {formatRelative(signal.created_at)}
         </div>
-        {signal.collected_at && signal.collected_at !== signal.created_at && (
+        {signal.collected_at && (
           <div className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-            collected {formatRelative(signal.collected_at)}
+            col. {formatRelative(signal.collected_at)}
           </div>
         )}
       </td>

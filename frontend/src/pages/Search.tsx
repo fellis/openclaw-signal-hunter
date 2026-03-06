@@ -60,9 +60,9 @@ function ResultRow({ result, mode }: { result: SearchResult; mode: Mode }) {
           <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
             {formatRelative(result.created_at)}
           </div>
-          {result.collected_at && result.collected_at !== result.created_at && (
+          {result.collected_at && (
             <div className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-              collected {formatRelative(result.collected_at)}
+              col. {formatRelative(result.collected_at)}
             </div>
           )}
           <div className="text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
