@@ -58,6 +58,7 @@ def _fetch_pending(conn: Any, batch: int) -> list[dict]:
             WHERE p.is_relevant  = true
               AND p.summary       IS NOT NULL
               AND eq.status       = 'done'
+              AND (p.language IS NULL OR p.language != %s)
               AND NOT EXISTS (
                   SELECT 1 FROM signal_translations st
                   WHERE st.signal_id = r.id AND st.lang = %s
@@ -65,7 +66,7 @@ def _fetch_pending(conn: Any, batch: int) -> list[dict]:
             ORDER BY p.rank_score DESC NULLS LAST
             LIMIT %s
             """,
-            (TARGET_LANG, batch),
+            (TARGET_LANG, TARGET_LANG, batch),
         )
         return [dict(r) for r in cur.fetchall()]
 
