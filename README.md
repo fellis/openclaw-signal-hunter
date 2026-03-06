@@ -29,10 +29,10 @@ Everything runs on a VPS, fully offline (except for API calls to data sources an
 | **PostgreSQL 16** | Structured storage: signals, profiles, cursors, LLM cost log |
 | **Qdrant** | Vector search (cosine, 1024 dims) |
 | **BAAI/bge-m3** | Cross-lingual embeddings via `sentence-transformers` |
-| **Embedder service** | FastAPI Docker container - bge-m3 loaded once, serves HTTP /embed |
+| **Embedder service** | Two FastAPI containers - `embedder:6335` for classify/query, `embedder-vectorizer:6336` for Qdrant upserts; model loaded once, both share `hf_cache` volume |
 | **Local LLM** | Summary generation, rule suggestions, keyword enrichment (OpenAI-compatible endpoint) |
 | **Claude (Anthropic)** | Queries, resolution strategy (configurable) |
-| **Docker Compose** | PostgreSQL + Qdrant + Embedder service |
+| **Docker Compose** | PostgreSQL + Qdrant + Embedder (classify) + Embedder-Vectorizer (upsert) |
 
 ---
 
@@ -71,9 +71,10 @@ skill/main.py         ← CLI dispatcher
          └── config_manager.py ← atomic config.json writes (temp file + rename)
 
 Docker Compose services:
-     ├── postgres:5433         ← PostgreSQL 16
-     ├── qdrant:6333           ← Qdrant vector DB
-     └── embedder:6335         ← FastAPI + bge-m3 (always warm, restart: unless-stopped)
+     ├── postgres:5433              ← PostgreSQL 16
+     ├── qdrant:6333                ← Qdrant vector DB
+     ├── embedder:6335              ← FastAPI + bge-m3, used by classifier + query
+     └── embedder-vectorizer:6336   ← same image, dedicated to Qdrant upserts (outbox)
            embedder_service.py ← /embed (batch) + /embed-query + /health
 ```
 
@@ -82,7 +83,7 @@ Docker Compose services:
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
 - **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > summarize_batch(90)
-- **Three separate workers:** Embed Worker (every minute) classifies signals via embeddings (no LLM); LLM Worker (every minute) handles resolve + summarize; Collect Worker (every 5 min) handles API collection - they never block each other
+- **Four separate cron jobs:** Embed Worker (every minute) classifies signals via embeddings (no LLM) using `embedder:6335`; LLM Worker (every minute) handles resolve + summarize; Collect Worker (every 5 min) handles API collection; Auto Embed (every minute) vectorizes classified signals into Qdrant using `embedder-vectorizer:6336` - classification and vectorization never compete for the same embedder instance
 - **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
 - **Daily collection per keyword:** Collect Worker locks each keyword with `last_collected_at = now()` before collecting; re-triggers only after 24h; stalest keywords first
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
@@ -96,7 +97,7 @@ Docker Compose services:
 ## Prerequisites
 
 - VPS or local machine with Python 3.11+
-- Docker + Docker Compose (for PostgreSQL, Qdrant, and the Embedder service)
+- Docker + Docker Compose (for PostgreSQL, Qdrant, Embedder, and Embedder-Vectorizer)
 - [OpenClaw](https://github.com/openclaw) installed
 - Local LLM with OpenAI-compatible API (e.g. [Ollama](https://ollama.com) with Devstral, Mistral, etc.)
 - Anthropic API key (for queries and keyword resolution strategy)
@@ -161,15 +162,18 @@ cp config.example.json config.json
 docker compose up -d
 ```
 
-This starts three services:
+This starts four services:
 - **PostgreSQL 16** (port 5433) - schema applied automatically on first start
 - **Qdrant** (port 6333) - vector storage, data persisted in `qdrantdata` volume
-- **Embedder** (port 6335) - FastAPI + bge-m3; downloads model on first start (~570MB, cached in `hf_cache` volume)
+- **Embedder** (port 6335) - FastAPI + bge-m3; used by Embed Worker (classification) and semantic query. Downloads model on first start (~570MB, cached in `hf_cache` volume)
+- **Embedder-Vectorizer** (port 6336) - same image, dedicated to Auto Embed (Qdrant upserts). Shares `hf_cache` volume - no re-download
 
-Check embedder is ready:
+Check both embedders are ready:
 
 ```bash
 curl http://localhost:6335/health
+# {"status":"ok","model":"BAAI/bge-m3","ready":true}
+curl http://localhost:6336/health
 # {"status":"ok","model":"BAAI/bge-m3","ready":true}
 ```
 
@@ -608,6 +612,11 @@ Key sections:
     "service_url": "http://localhost:6335",
     "max_items_per_run": 128
   },
+  "embedder_vectorizer": {
+    "service_url": "http://localhost:6336",
+    "batch_size": 64,
+    "max_items_per_run": 512
+  },
   "llm_routing": {
     "process":          "local",
     "suggest_rules":    "local",
@@ -641,8 +650,13 @@ Key sections:
 - `max_batches_per_run: 5` - max batches the Embed Worker processes per cron tick (50 × 5 = 250 signals/min max).
 
 **`embedder` settings explained:**
-- `service_url` - HTTP endpoint of the embedder Docker container. If unreachable, falls back to loading bge-m3 locally.
+- `service_url` - HTTP endpoint used by Embed Worker (classify) and `signal_hunter_query`. If unreachable, falls back to loading bge-m3 locally.
 - `max_items_per_run: 128` - signals to embed per cron run. At ~100ms/signal with the service: 128 × 100ms ≈ 13s per run.
+
+**`embedder_vectorizer` settings explained:**
+- `service_url` - dedicated endpoint for Auto Embed (Qdrant upserts). Points to `embedder-vectorizer` container on port 6336. Separating classification and vectorization prevents them from competing for the same HTTP service under load.
+- `max_items_per_run: 512` - larger batch than `embedder` because vectorization is the bottleneck; Auto Embed runs every minute to keep up with the classification output.
+- If `embedder_vectorizer` section is absent, `embed_pending` falls back to `embedder.service_url`.
 
 All writes to `config.json` are atomic (temp file + fsync + rename) - safe for concurrent processes.
 
@@ -650,9 +664,18 @@ Sensitive values (API keys, DB passwords) live only in `.env` and are never writ
 
 ---
 
-## Embedder service
+## Embedder services
 
-The embedder is a separate FastAPI Docker container (`embedder_service.py`) that keeps `bge-m3` loaded in memory permanently. This eliminates the 10-30s model load overhead that would otherwise occur on every `sh_embed` or `sh_query` call.
+Two FastAPI containers share the same `embedder_service.py` image but serve different purposes:
+
+| Container | Port | Used by |
+|---|---|---|
+| `embedder` | 6335 | Embed Worker (classify), `signal_hunter_query` |
+| `embedder-vectorizer` | 6336 | Auto Embed (`signal_hunter_embed`, Qdrant upserts) |
+
+Keeping them separate prevents classification and vectorization from competing for the same HTTP service under load - critical when there is a large backlog in `embedding_queue`.
+
+Both containers share the `hf_cache` Docker volume - model downloads once, both instances reuse it.
 
 ```
 POST /embed        {"texts": [...], "normalize": true}  → {"vectors": [[...]]}
@@ -661,8 +684,6 @@ GET  /health                                            → {"status": "ok", "re
 ```
 
 The `Embedder` class in `core/embedder.py` calls the service via HTTP when `service_url` is configured, and falls back to loading the model locally if the service is down.
-
-The model is cached in the `hf_cache` Docker volume - not re-downloaded on container restart.
 
 ---
 
@@ -687,11 +708,16 @@ PostgreSQL tables:
 ## Rank score formula
 
 ```
-rank_score = (0.3 * log10(1 + engagement) + 0.7 * (intensity/5) * confidence)
+engagement_raw = score + 0.5 * comments_count
+rank_score = (0.3 * log10(1 + engagement_raw) + 0.7 * (intensity/5) * confidence)
              * 0.5^(hours_since_post / 168)
 ```
 
 Weights: engagement 30%, quality (intensity × confidence) 70%, half-life 7 days.
+
+`score` is the platform's primary engagement metric (SO votes, HN points, Reddit karma, GitHub reactions). `comments_count` gets half the weight of `score` because for sources where reactions are rare (GitHub Issues typically score 0-3), comments are the real engagement signal. The combined formula handles all sources fairly.
+
+In Qdrant queries: `combined_score = rank_score * similarity`.
 
 ---
 
@@ -730,6 +756,37 @@ Then restart the OpenClaw container. The worker will create a fresh isolated ses
 | Auto Embed | `isolated` | `agentTurn` | `none` |
 
 > Note: OpenClaw may overwrite `delivery.mode` back to `"announce"` after the first cron run. If skipping resumes, re-apply the fix.
+
+### Auto Embed cron runs but nothing gets vectorized
+
+**Symptom:** `embedding_queue` does not shrink despite Auto Embed cron firing every minute. Logs show `embed_pending` running but `pending` count stays the same.
+
+**Root cause:** Two possible causes, often both present together:
+
+1. **Wrong tool name in cron message.** If `payload.message` in `cron/jobs.json` says something like `"Run sh_embed..."` instead of the exact tool name `signal_hunter_embed`, the LLM agent does not recognize which tool to call and may no-op.
+
+2. **Tool description discourages cron calls.** If `signal_hunter_embed` in `src/tools.ts` contains text like `"Call this manually ONLY if user explicitly asks"`, the agent interprets cron-triggered messages as non-qualifying and suppresses the call.
+
+**Fix:**
+
+In `~/.openclaw/cron/jobs.json` for "Signal Hunter - Auto Embed":
+```json
+{
+  "payload": {
+    "message": "Run **signal_hunter_embed** to vectorize pending signals into Qdrant. Report briefly: how many vectors indexed."
+  }
+}
+```
+
+In `src/tools.ts`, ensure the `signal_hunter_embed` description starts with:
+```typescript
+'CRON TRIGGER: call this tool when the cron message says "signal_hunter_embed". ' +
+'Also triggered manually by: "embed now", "update vector index now", "index signals immediately".'
+```
+
+Restart the `openclaw-gateway` container after changing `tools.ts` so the plugin reloads with the updated tool definition.
+
+---
 
 ### Keyword resolve tasks stuck in `failed` with `Internal Server Error`
 
