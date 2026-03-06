@@ -374,7 +374,7 @@ async def get_clusters(
 @router.get("/report/signals")
 async def get_signals(
     ids: list[str] = Query(default=[]),
-    sort_by: str = Query("rank_score"),
+    sort_by: str = Query("collected_at"),
     sort_dir: str = Query("desc"),
 ):
     """Return level-3 full signal data by raw_signal_ids."""
@@ -435,10 +435,10 @@ async def get_signals(
         })
 
     # Apply sorting
-    valid_sort = {"rank_score", "intensity", "confidence", "score", "comments_count", "created_at"}
+    valid_sort = {"rank_score", "intensity", "confidence", "score", "comments_count", "created_at", "collected_at"}
     if sort_by in valid_sort:
         rev = sort_dir == "desc"
-        signals.sort(key=lambda s: s.get(sort_by) or 0, reverse=rev)
+        signals.sort(key=lambda s: s.get(sort_by) or "", reverse=rev)
 
     return {"signals": signals}
 

@@ -64,7 +64,7 @@ function CategoryBadge({ name }: { name: string }) {
 // ---------------------------------------------------------------------------
 
 type SortKey = 'rank_score' | 'avg_rank_score' | 'avg_intensity' | 'avg_confidence' | 'count' | 'last_signal_at'
-type SortKeyL3 = 'rank_score' | 'intensity' | 'confidence' | 'score' | 'comments_count' | 'created_at'
+type SortKeyL3 = 'rank_score' | 'intensity' | 'confidence' | 'score' | 'comments_count' | 'created_at' | 'collected_at'
 
 function SortHeader({
   label, col, sortBy, sortDir, onSort,
@@ -281,7 +281,7 @@ function CategoryRow({
   const [expanded, setExpanded] = useState(false)
   const [clusters, setClusters] = useState<Cluster[] | null>(null)
   const [loading, setLoading] = useState(false)
-  const [clusterSort, setClusterSort] = useState<SortKeyL3>('rank_score')
+  const [clusterSort, setClusterSort] = useState<SortKeyL3>('collected_at')
   const [clusterSortDir, setClusterSortDir] = useState<'asc' | 'desc'>('desc')
 
   const expand = useCallback(async () => {
@@ -429,7 +429,7 @@ export default function SignalTable({ categories, filters }: TableProps) {
               </span>
             </th>
             <th className="text-left pr-4 py-2.5">
-              <SortHeader label="Last Signal" col="last_signal_at" {...colProps} />
+              <SortHeader label="Collected" col="last_signal_at" {...colProps} />
             </th>
           </tr>
         </thead>
