@@ -39,11 +39,9 @@ def _qdrant_search(
     top_k: int,
     threshold: float,
     sources: list[str],
-    intensity_min: int | None,
-    intensity_max: int | None,
+    intensities: list[int],
     confidence_min: float | None,
     confidence_max: float | None,
-    languages: list[str],
     keywords: list[str],
     date_from: str | None,
     date_to: str | None,
@@ -64,16 +62,10 @@ def _qdrant_search(
 
     if sources:
         must.append(FieldCondition(key="source_type", match=MatchAny(any=sources)))
-    if languages:
-        must.append(FieldCondition(key="language", match=MatchAny(any=languages)))
     if keywords:
-        # Any keyword must be in the payload keywords array
         must.append(FieldCondition(key="keywords", match=MatchAny(any=keywords)))
-    if intensity_min is not None or intensity_max is not None:
-        must.append(FieldCondition(
-            key="intensity",
-            range=Range(gte=intensity_min, lte=intensity_max),
-        ))
+    if intensities:
+        must.append(FieldCondition(key="intensity", match=MatchAny(any=intensities)))
     if confidence_min is not None or confidence_max is not None:
         must.append(FieldCondition(
             key="confidence",
@@ -186,11 +178,9 @@ async def semantic_search(
     threshold: float = Query(0.45, ge=0.0, le=1.0),
     sources: list[str] = Query(default=[]),
     keywords: list[str] = Query(default=[]),
-    intensity_min: int | None = Query(None, ge=1, le=5),
-    intensity_max: int | None = Query(None, ge=1, le=5),
+    intensities: list[int] = Query(default=[]),
     confidence_min: float | None = Query(None, ge=0.0, le=1.0),
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
-    languages: list[str] = Query(default=[]),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     lang: str = Query("en"),
@@ -200,9 +190,9 @@ async def semantic_search(
     cache_key = dict(
         q=q, top_k=top_k, threshold=threshold,
         sources=sorted(sources), keywords=sorted(keywords),
-        intensity_min=intensity_min, intensity_max=intensity_max,
+        intensities=sorted(intensities),
         confidence_min=confidence_min, confidence_max=confidence_max,
-        languages=sorted(languages), date_from=date_from, date_to=date_to,
+        date_from=date_from, date_to=date_to,
     )
     cached = cache.get("semantic_search", cache_key)
     if cached is not None:
@@ -219,11 +209,9 @@ async def semantic_search(
         top_k=top_k,
         threshold=threshold,
         sources=sources,
-        intensity_min=intensity_min,
-        intensity_max=intensity_max,
+        intensities=intensities,
         confidence_min=confidence_min,
         confidence_max=confidence_max,
-        languages=languages,
         keywords=keywords,
         date_from=date_from,
         date_to=date_to,
