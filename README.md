@@ -9,8 +9,8 @@ Market intelligence for AI/ML builders. Monitors GitHub, Hugging Face, Hacker Ne
 You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 
 1. **Discovers** where the topic is discussed (repos, subreddits, HF models, SO tags) via real API calls - no LLM guessing
-2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested relevant subreddits
-3. **Collects incrementally** (GitHub issues, HF discussions, HN threads, SO questions, Reddit posts) using cursors
+2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested aliases and search queries
+3. **Collects automatically** - every 24h per keyword, runs in parallel background subprocesses (GitHub, HF, HN, SO, Reddit), expanding the plan with newly appeared repos/spaces on each run
 4. **Classifies** every signal with a local LLM using your extraction rules (pain points, feature requests, comparisons, adoption...)
 5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
@@ -50,11 +50,11 @@ src/runner.ts         ← spawns: python -m skill <command> [args]
 skill/main.py         ← CLI dispatcher
      │
      ├── core/resolver.py      ← keyword discovery + LLM enrichment
-     ├── core/orchestrator.py  ← collect → embed pipeline (process moved to worker)
+     ├── core/orchestrator.py  ← collect → embed pipeline
      ├── core/processor.py     ← LLM classification (token-aware batching)
      ├── core/embedder.py      ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py    ← routes ops to local/Claude by config
-     ├── core/llm_worker.py    ← LLM task queue worker (one task per cron tick)
+     ├── core/llm_worker.py    ← LLM task queue worker + spawns collect subprocesses
      │
      ├── collectors/
      │   ├── github.py         ← GitHub Issues (repo-scoped, cursor on updated_at)
@@ -80,7 +80,10 @@ Docker Compose services:
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
 - Token-aware batching for LLM classification (validated: ~10 signals per batch)
-- **LLM Task Queue:** all local LLM calls go through `llm_task_queue` table - one task at a time, no GPU contention. Priority: resolve(50) > process_batch(90).
+- **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > process_batch(90)
+- **Collect runs in parallel subprocesses** - the worker spawns `python -m skill collect_keyword` per stale keyword (fire & forget) so the LLM never idles waiting for external API calls. Up to 3 concurrent collect subprocesses per worker tick.
+- **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
+- **Daily collection per keyword:** worker locks each keyword with `last_collected_at = now()` before spawning; re-triggers only after 24h; stalest keywords first
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
 - Embedder runs as a persistent Docker service: model loads once at startup, all encode calls go via HTTP - no per-run model reload overhead
 - Anti-hallucination gate on query answers: URLs not in source data are stripped
@@ -287,28 +290,25 @@ ClawBot: ✓ Plans saved for 3 keywords.
 
 ---
 
-### Step 4 - Collect
+### Step 4 - Collection happens automatically
+
+No manual step needed. After keywords are resolved and plans approved, the **LLM Worker** (runs every minute) automatically spawns background collect subprocesses for each keyword not collected in the last 24 hours:
 
 ```
-You: collect
+Worker tick:
+  → spawns: python -m skill collect_keyword {"keyword": "RAG"}      (background)
+  → spawns: python -m skill collect_keyword {"keyword": "ollama"}   (background)
+  → continues: LLM process_batch (doesn't wait for collect to finish)
+```
+
+First run fetches 90 days of history per source. Subsequent runs are incremental (cursor-based). Check status:
+
+```
+You: статус очереди
 ```
 
 ```
-ClawBot: Running in background... (first run: 15-30 min for 90 days of history)
-```
-
-```
-ClawBot:
-✓ Collection done:
-
-Keyword    | GitHub | HuggingFace | HN  | SO  | Reddit | Total
------------|--------|-------------|-----|-----|--------|------
-RAG        | 400    | 87          | 89  | 200 | 0*     | 776
-ollama     | 200    | 43          | 43  | 98  | 0*     | 384
-LangChain  | 200    | 61          | 67  | 200 | 0*     | 528
-
-*Reddit disabled until OAuth credentials configured.
-1688 raw signals in database.
+ClawBot: LLM queue: 0 pending, 0 running. Last collect: RAG 2m ago, ollama in progress.
 ```
 
 ---
@@ -442,15 +442,19 @@ You: this looks good, save this as the report template for ollama
 
 ### Step 9 - Automation (cron)
 
-For continuous background operation, configure three cron jobs via OpenClaw:
+For continuous background operation, configure two cron jobs via OpenClaw:
 
-**LLM Worker (classify signals + resolve keywords):**
+**LLM Worker (everything - resolve + classify + trigger collect):**
 ```
 You: настрой воркер
 ```
-The bot creates a cron job `* * * * *` (every minute). The worker picks the next task from `llm_task_queue` and executes it - one task per tick, no GPU contention:
-- `resolve` tasks (priority 50) - keyword enrichment from bulk queue
-- `process_batch` tasks (priority 90) - signal classification, auto-enqueued when signals need processing
+The bot creates a cron job `* * * * *` (every minute). Each tick the worker:
+1. Spawns background `collect_keyword` subprocesses for stale keywords (not collected in 24h) - up to 3 per tick, runs in parallel, LLM doesn't wait
+2. Processes LLM tasks from queue (sequential, one at a time):
+   - `resolve` (priority 50) - keyword enrichment, auto-approves collection plan
+   - `process_batch` (priority 90) - LLM signal classification, auto-enqueued when raw signals exist
+
+No separate collect cron needed - collection is automatic.
 
 **Embedding (vectorize classified signals):**
 ```
@@ -458,13 +462,15 @@ You: set embed schedule - 128 items per run
 ```
 Then via `cron.update` with `expr: "*/10 * * * *"` - runs every 10 minutes, embeds up to 128 signals per run.
 
-**Collection (fetch new signals):**
-```
-You: set collect schedule
-```
-Then via `cron.update` with `expr: "0 8,20 * * *"` (twice a day at 08:00 and 20:00).
-
 All cron jobs run silently (`delivery.mode: none`) - no Telegram noise.
+
+**Full automated lifecycle after adding a keyword:**
+```
+queue_resolve → resolve (LLM, ~1 min) → auto-approved plan
+             → collect subprocess (daily, 90d backfill on first run, incremental after)
+             → process_batch (LLM, auto-triggered) → embed (cron, every 10 min)
+             → GitHub/HF plan auto-expanded with new repos on each collect
+```
 
 **Adding many keywords at once (bulk queue):**
 ```
@@ -514,20 +520,20 @@ Or via slash command: `/sh embedder [status|start|stop|restart|logs|build]`
 | `set_credentials <json>` | Save API credentials to config |
 | `resolve <keyword>` | Discover + propose collection plan (one keyword, interactive) |
 | `queue_resolve <json>` | Add many keywords to background queue `{"keywords": [...]}` |
-| `queue_status` | Show LLM task queue: pending / running / failed |
-| `run_worker` | Execute next LLM task from queue (called by cron every minute) |
-| `set_worker_interval <json>` | Configure worker cron interval `{"interval_seconds": 60}` |
 | `approve_plan <json>` | Save approved collection plan |
 | `update_plan <json>` | Add or remove targets from a plan |
 | `refresh_profile <keyword>` | Re-run discovery, update cached profile |
 | `list_keywords` | List all tracked keywords |
-| `collect` | Collect from all approved plans (incremental) |
-| `embed` | Vectorize pending signals into Qdrant |
+| `delete_keywords <json>` | Delete keywords and their plans `{"keywords": [...]}` (confirm first) |
+| `run_worker` | Process LLM task queue (called by cron every minute) |
+| `queue_status` | Show LLM task queue: pending / running / failed |
+| `set_worker_interval <json>` | Configure worker cron interval `{"interval_seconds": 60}` |
+| `retry_failed` | Reset all failed LLM tasks back to pending |
+| `embed` | Vectorize pending signals into Qdrant (runs automatically via cron) |
+| `set_embed_schedule <json>` | Configure max items per embed cron run |
 | `reprocess <json>` | Delete and reclassify signals for a keyword |
 | `suggest_rules <keyword>` | Analyze real posts, suggest extraction rules |
 | `approve_rules <json>` | Save approved rules to config |
-| `set_embed_schedule <json>` | Configure max items per embed cron run |
-| `set_collect_schedule <json>` | Configure collect cron schedule |
 | `embedder_service <json>` | Manage embedder Docker container (status/start/stop/restart/logs/build) |
 | `query <prompt>` | Semantic search + LLM synthesis |
 | `generate_change_report <keyword>` | Delta report since last snapshot |
@@ -632,10 +638,10 @@ PostgreSQL tables:
 | `processed_signals` | LLM classification results |
 | `embedding_queue` | Outbox: pending Qdrant upserts |
 | `collection_cursors` | Incremental collection state per target |
-| `keyword_profiles` | Discovered + enriched keyword metadata |
+| `keyword_profiles` | Discovered + enriched keyword metadata (`last_collected_at` tracks daily collect) |
 | `keyword_collection_plans` | Approved collection plans |
 | `change_report_snapshots` | Saved report history |
-| `llm_task_queue` | LLM task queue (resolve / process_batch), priority-ordered |
+| `llm_task_queue` | LLM task queue: resolve(50) / process_batch(90), priority-ordered |
 | `llm_usage_log` | Token usage and cost per operation |
 
 ---
