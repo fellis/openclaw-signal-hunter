@@ -77,12 +77,14 @@ class StackOverflowCollector(BaseCollector):
             if tag_name:
                 targets.append(SearchTarget(query=tag_name, scope="tag", params={"tag": tag_name}))
 
-        if not targets:
-            targets.append(SearchTarget(
-                query=profile.canonical_name,
-                scope="search",
-                params={},
-            ))
+        # Always add a full-text search target.
+        # For tagged keywords: captures questions that mention the tool in body without tagging it (+5-25% more).
+        # For untagged keywords (new tools): this is the only source of results.
+        targets.append(SearchTarget(
+            query=profile.canonical_name,
+            scope="search",
+            params={},
+        ))
 
         return SearchPlan(targets=targets, max_results_per_target=200)
 
@@ -151,7 +153,13 @@ class StackOverflowCollector(BaseCollector):
     # ------------------------------------------------------------------
 
     def _base_params(self) -> dict[str, Any]:
-        params: dict[str, Any] = {"site": "stackoverflow", "pagesize": _PAGE_SIZE, "order": "desc", "sort": "creation"}
+        params: dict[str, Any] = {
+            "site": "stackoverflow",
+            "pagesize": _PAGE_SIZE,
+            "order": "desc",
+            "sort": "creation",
+            "filter": "withbody",
+        }
         if self._api_key:
             params["key"] = self._api_key
         return params
@@ -165,8 +173,8 @@ class StackOverflowCollector(BaseCollector):
     def _search_questions(
         self, query: str, since_ts: int, limit: int
     ) -> tuple[list[RawSignal], CursorState]:
-        params = {**self._base_params(), "intitle": query, "fromdate": since_ts}
-        return self._paginate_questions(f"{_SO_API}/search", params, limit, key=query)
+        params = {**self._base_params(), "q": query, "fromdate": since_ts}
+        return self._paginate_questions(f"{_SO_API}/search/advanced", params, limit, key=query)
 
     def _paginate_questions(
         self, url: str, params: dict[str, Any], limit: int, key: str
