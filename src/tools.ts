@@ -530,7 +530,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_run_worker',
       description:
-        'Process the next pending task from the LLM queue (resolve or process_batch). ' +
+        'Process the next pending LLM task (resolve or summarize_batch). ' +
         'Called automatically by the worker cron every minute. ' +
         'Picks the highest-priority pending task, executes it, and reports the result. ' +
         'If queue is empty or another task is already running, exits immediately. ' +
@@ -544,6 +544,31 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         if (d?.status === 'idle') return text(`Worker: queue is empty or task already running.`);
         return text(
           `**Worker done:** ${d?.task_type ?? '?'} - ${d?.keyword ?? d?.status ?? 'ok'}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // Embed Worker - classify signals via embeddings (called by cron)
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_run_embed_worker',
+      description:
+        'Embed worker: classifies raw signals using vector similarity (no LLM, no GPU). ' +
+        'Fetches unprocessed signals, embeds them via local bge-m3 service, ' +
+        'classifies by cosine similarity against rule vectors, saves with summary=null. ' +
+        'Summaries are generated separately by the LLM worker (summarize_batch). ' +
+        'Called automatically by the embed worker cron every minute. ' +
+        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_embed_worker". ' +
+        'User triggers: "запусти embed воркер", "классифицируй сигналы", "run embed worker".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'run_embed_worker');
+        if (!result.success) return text(`Embed worker failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        if (d?.status === 'idle') return text(`Embed worker: no unprocessed signals.`);
+        return text(
+          `**Embed worker done:** classified=${d?.classified ?? 0}, remaining=${d?.remaining ?? 0}`
         );
       },
     },

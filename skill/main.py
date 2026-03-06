@@ -426,16 +426,19 @@ _SH_WORKER_CRON_JOB_ID = "e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b"
 
 def cmd_run_worker(json_str: str = "{}") -> None:
     """
-    Process LLM tasks in a loop until the queue is empty or 50-second budget is exhausted.
-    Called by cron on every tick (default: every minute).
+    Process LLM tasks (resolve, summarize_batch) in a loop until queue is empty
+    or 50-second budget is exhausted. Called by cron every minute.
 
     Behavior per loop iteration:
       1. Reset tasks stuck in 'running' for > 10 min (crash recovery)
       2. Skip if another task is still running
-      3. Auto-enqueue process_batch if unprocessed signals exist and queue is empty
+      3. Auto-enqueue summarize_batch if unsummarized signals exist
       4. Claim and execute the next pending task (by priority then age)
-      5. On success: delete task. On error: retry up to 3 times then mark 'failed'.
-      6. Repeat until queue empty or 50-second budget exceeded.
+      5. On success: complete task. On error: retry up to 3 times then mark 'failed'.
+      6. Repeat until queue empty or budget exceeded.
+
+    NOTE: embedding classification runs in a SEPARATE embed worker cron
+    (cmd_run_embed_worker). This worker is LLM-only.
     """
     from core.llm_worker import LLMWorker  # noqa: PLC0415
 
@@ -444,6 +447,25 @@ def cmd_run_worker(json_str: str = "{}") -> None:
     worker = LLMWorker(config, storage)
     result = worker.run_loop()
     _out(result)
+
+
+def cmd_run_embed_worker(json_str: str = "{}") -> None:
+    """
+    Embed Worker: classifies raw signals using embedding similarity (no LLM).
+    Called by a dedicated cron every minute.
+
+    Runs independently from the LLM worker - no LLM calls, no GPU usage.
+    Uses the local embedder HTTP service (bge-m3) for vector similarity.
+    Saves classified signals with summary=null; summaries are generated
+    asynchronously by the LLM worker (summarize_batch task).
+    """
+    from core.embed_worker import EmbedWorker  # noqa: PLC0415
+
+    config = _load_config()
+    storage = _make_storage()
+    worker = EmbedWorker(config, storage)
+    result = worker.run()
+    _out({"phase": "process", **result})
 
 
 def cmd_queue_resolve(json_str: str) -> None:
@@ -947,6 +969,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "list_providers":           (cmd_list_providers, False),
     "set_routing":              (cmd_set_routing, True),
     "run_worker":               (cmd_run_worker, False),
+    "run_embed_worker":         (cmd_run_embed_worker, False),
     "queue_resolve":            (cmd_queue_resolve, True),
     "queue_status":             (cmd_queue_status, False),
     "set_worker_interval":      (cmd_set_worker_interval, True),

@@ -1,15 +1,14 @@
 """
 LLM Task Queue Worker.
-Processes tasks from llm_task_queue sequentially, one at a time.
+Processes LLM tasks from llm_task_queue sequentially, one at a time.
 Called by cron (every minute) via skill command 'run_worker'.
 
 Task types and priorities (lower = higher priority):
   - resolve:          50  - enrich keyword with LLM, create collection plan
-  - process_batch:    90  - embed-classify a batch of raw signals (no LLM)
-  - summarize_batch:  95  - generate summaries for classified signals via LLM
+  - summarize_batch:  90  - generate summaries for classified signals via LLM
 
-Collection runs via a SEPARATE collect worker cron (cmd_run_collect_worker).
-This worker is LLM-only: no API calls to GitHub/Reddit/HN/SO/HF.
+Embedding classification (no LLM) runs via a SEPARATE embed worker cron
+(cmd_run_embed_worker). Collection runs via cmd_run_collect_worker.
 
 Worker guarantees:
   - Only one LLM task runs at a time (has_running_llm_task check)
@@ -63,17 +62,6 @@ class LLMWorker:
                 log.warning("[llm_worker] unexpected running task, stopping loop")
                 break
 
-            # Auto-enqueue process_batch when signals need classification
-            if (
-                not self._storage.has_pending_process_batch()
-                and self._storage.count_unprocessed() > 0
-            ):
-                self._storage.enqueue_llm_task(
-                    task_type="process_batch",
-                    priority=90,
-                    payload={},
-                )
-
             # Auto-enqueue summarize_batch when relevant signals need summaries
             if (
                 not self._storage.has_pending_task_of_type("summarize_batch")
@@ -81,7 +69,7 @@ class LLMWorker:
             ):
                 self._storage.enqueue_llm_task(
                     task_type="summarize_batch",
-                    priority=95,
+                    priority=90,
                     payload={},
                 )
 
@@ -98,8 +86,6 @@ class LLMWorker:
             try:
                 if task_type == "resolve":
                     result = self._handle_resolve(payload)
-                elif task_type == "process_batch":
-                    result = self._handle_process_batch()
                 elif task_type == "summarize_batch":
                     result = self._handle_summarize_batch()
                 else:
@@ -165,21 +151,6 @@ class LLMWorker:
             "auto_approved": bool(plans),
             "sources": list(plans.keys()) if plans else [],
         }
-
-    def _handle_process_batch(self) -> dict[str, Any]:
-        """
-        Run classification batches up to config.processor.max_batches_per_run.
-        With embed mode each batch is fast (~10-60s), so multiple batches fit
-        within the worker time budget. Default: 3 batches per task.
-        Returns count of classified signals and remaining count.
-        """
-        from core.orchestrator import Orchestrator  # noqa: PLC0415
-
-        max_batches = self._config.get("processor", {}).get("max_batches_per_run", 3)
-        router = self._make_router()
-        orch = Orchestrator(self._config, self._storage)
-        result = orch.process(router, max_batches=max_batches)
-        return result
 
     def _handle_summarize_batch(self) -> dict[str, Any]:
         """
