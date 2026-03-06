@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from storage.config_manager import ConfigManager
 from web_server.db import fetchall, fetchone
 from web_server.services.clustering import (
     build_cluster_key,
@@ -103,11 +104,9 @@ def _build_where(
     date_from: str | None,
     date_to: str | None,
     sources: list[str],
-    intensity_min: int | None,
-    intensity_max: int | None,
+    intensities: list[int],
     confidence_min: float | None,
     confidence_max: float | None,
-    languages: list[str],
     keywords: list[str],
 ) -> tuple[str, list]:
     conditions = ["p.is_relevant = true"]
@@ -122,21 +121,15 @@ def _build_where(
     if sources:
         conditions.append("r.source = ANY(%s)")
         params.append(sources)
-    if intensity_min is not None:
-        conditions.append("p.intensity >= %s")
-        params.append(intensity_min)
-    if intensity_max is not None:
-        conditions.append("p.intensity <= %s")
-        params.append(intensity_max)
+    if intensities:
+        conditions.append("p.intensity = ANY(%s)")
+        params.append(intensities)
     if confidence_min is not None:
         conditions.append("p.confidence >= %s")
         params.append(confidence_min)
     if confidence_max is not None:
         conditions.append("p.confidence <= %s")
         params.append(confidence_max)
-    if languages:
-        conditions.append("p.language = ANY(%s)")
-        params.append(languages)
     if keywords:
         kw_conds = ["%s = ANY(p.keywords_matched)" for _ in keywords]
         conditions.append("(" + " OR ".join(kw_conds) + ")")
@@ -226,11 +219,9 @@ async def get_report(
     sources: list[str] = Query(default=[]),
     categories: list[str] = Query(default=[]),
     keywords: list[str] = Query(default=[]),
-    intensity_min: int | None = Query(None, ge=1, le=5),
-    intensity_max: int | None = Query(None, ge=1, le=5),
+    intensities: list[int] = Query(default=[]),
     confidence_min: float | None = Query(None, ge=0.0, le=1.0),
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
-    languages: list[str] = Query(default=[]),
     sort_by: str = Query("rank_score"),
     sort_dir: str = Query("desc"),
 ):
@@ -239,17 +230,17 @@ async def get_report(
     cache_key = dict(
         date_from=date_from, date_to=date_to, sources=sorted(sources),
         categories=sorted(categories), keywords=sorted(keywords),
-        intensity_min=intensity_min, intensity_max=intensity_max,
+        intensities=sorted(intensities),
         confidence_min=confidence_min, confidence_max=confidence_max,
-        languages=sorted(languages), sort_by=sort_by, sort_dir=sort_dir,
+        sort_by=sort_by, sort_dir=sort_dir,
     )
     cached = cache.get("report", cache_key)
     if cached is not None:
         return cached
 
     where, params = _build_where(
-        date_from, date_to, sources, intensity_min, intensity_max,
-        confidence_min, confidence_max, languages, keywords,
+        date_from, date_to, sources, intensities,
+        confidence_min, confidence_max, keywords,
     )
     rows = _fetch_signals(where, params)
     groups = _aggregate_signals(rows, categories)
@@ -273,28 +264,25 @@ async def get_clusters(
     date_to: str | None = Query(None),
     sources: list[str] = Query(default=[]),
     keywords: list[str] = Query(default=[]),
-    intensity_min: int | None = Query(None, ge=1, le=5),
-    intensity_max: int | None = Query(None, ge=1, le=5),
+    intensities: list[int] = Query(default=[]),
     confidence_min: float | None = Query(None, ge=0.0, le=1.0),
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
-    languages: list[str] = Query(default=[]),
 ):
     """Return level-2 clusters for a specific category (with LLM naming, cached 24h)."""
     cache = request.app.state.cache
     cache_key = dict(
         category=category, date_from=date_from, date_to=date_to,
         sources=sorted(sources), keywords=sorted(keywords),
-        intensity_min=intensity_min, intensity_max=intensity_max,
+        intensities=sorted(intensities),
         confidence_min=confidence_min, confidence_max=confidence_max,
-        languages=sorted(languages),
     )
     cached = cache.get("clusters", cache_key)
     if cached is not None:
         return cached
 
     where, params = _build_where(
-        date_from, date_to, sources, intensity_min, intensity_max,
-        confidence_min, confidence_max, languages, keywords,
+        date_from, date_to, sources, intensities,
+        confidence_min, confidence_max, keywords,
     )
     rows = _fetch_signals(where, params)
     groups = _aggregate_signals(rows, [category])
@@ -469,6 +457,24 @@ async def get_keywords():
     """Return list of tracked keywords for filter dropdown."""
     rows = fetchall("SELECT canonical_name FROM keyword_profiles ORDER BY canonical_name")
     return {"keywords": [r["canonical_name"] for r in rows]}
+
+
+@router.get("/rules")
+async def get_rules():
+    """Return extraction rules from config (categories used for signal classification)."""
+    config = ConfigManager().load()
+    raw_rules = config.get("extraction_rules", [])
+    rules = [
+        {
+            "name": r.get("name", ""),
+            "description": r.get("description", ""),
+            "priority": r.get("priority", 1),
+        }
+        for r in raw_rules
+        if r.get("name")
+    ]
+    rules.sort(key=lambda r: r["priority"], reverse=True)
+    return {"rules": rules}
 
 
 @router.get("/stats")

@@ -1,3 +1,9 @@
+export interface Rule {
+  name: string
+  description: string
+  priority: number
+}
+
 export interface Category {
   name: string
   count: number
@@ -101,8 +107,7 @@ export interface Filters {
   sources: string[]
   categories: string[]
   keywords: string[]
-  intensity_min: number | null
-  intensity_max: number | null
+  intensities: number[]
   confidence_min: number | null
   confidence_max: number | null
 }

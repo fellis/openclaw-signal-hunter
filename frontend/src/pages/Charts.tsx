@@ -7,7 +7,7 @@ import {
 import { Loader2 } from 'lucide-react'
 import { fetchTimeline, fetchSourcesBreakdown, fetchCategoriesBreakdown } from '@/api/report'
 import type { TimelinePoint, SourceBreakpoint } from '@/types'
-import { SOURCE_LABELS, SOURCE_COLORS, CATEGORY_COLORS } from '@/lib/utils'
+import { SOURCE_LABELS, SOURCE_COLORS, formatCategoryName } from '@/lib/utils'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -204,7 +204,7 @@ export default function Charts() {
               tick={AXIS_STYLE}
               tickLine={false}
               axisLine={false}
-              tickFormatter={v => v.replace(/_/g, ' ')}
+              tickFormatter={formatCategoryName}
             />
             <YAxis tick={AXIS_STYLE} tickLine={false} axisLine={false} width={40} />
             <Tooltip contentStyle={TOOLTIP_STYLE} />

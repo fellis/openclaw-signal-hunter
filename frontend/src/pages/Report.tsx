@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, Loader2 } from 'lucide-react'
 import FilterPanel from '@/components/report/FilterPanel'
 import SignalTable from '@/components/report/SignalTable'
-import { fetchReport, fetchStats } from '@/api/report'
-import type { Category, Filters, StatsResponse } from '@/types'
+import { fetchReport, fetchStats, fetchRules } from '@/api/report'
+import type { Category, Filters, Rule, StatsResponse } from '@/types'
 
 const DEFAULT_FILTERS: Filters = {
   date_from: '',
@@ -11,8 +11,7 @@ const DEFAULT_FILTERS: Filters = {
   sources: [],
   categories: [],
   keywords: [],
-  intensity_min: null,
-  intensity_max: null,
+  intensities: [],
   confidence_min: null,
   confidence_max: null,
 }
@@ -29,6 +28,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 export default function Report({ lang = 'en' }: { lang?: string }) {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [categories, setCategories] = useState<Category[]>([])
+  const [rules, setRules] = useState<Rule[]>([])
   const [total, setTotal] = useState(0)
   const [stats, setStats] = useState<StatsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -54,6 +54,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
 
   useEffect(() => {
     fetchStats().then(setStats).catch(() => {})
+    fetchRules().then(setRules).catch(() => {})
   }, [])
 
   const updateFilters = (partial: Partial<Filters>) =>
@@ -92,7 +93,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
       )}
 
       {/* Filters */}
-      <FilterPanel filters={filters} onChange={updateFilters} />
+      <FilterPanel filters={filters} onChange={updateFilters} rules={rules} />
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
@@ -112,7 +113,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
             No signals found for current filters.
           </div>
         ) : (
-          <SignalTable categories={categories} filters={filters} lang={lang} />
+          <SignalTable categories={categories} filters={filters} lang={lang} rules={rules} />
         )}
       </div>
     </div>

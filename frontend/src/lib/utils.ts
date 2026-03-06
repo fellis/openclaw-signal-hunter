@@ -48,13 +48,40 @@ export const SOURCE_COLORS: Record<string, string> = {
 
 export const CATEGORY_COLORS: Record<string, string> = {
   pain_point: '#ef4444',
+  pain_point_ai_agent: '#ef4444',
   feature_request: '#3b82f6',
+  feature_request_ai_agent: '#3b82f6',
   adoption_signal: '#22c55e',
+  adoption_ai_agent: '#22c55e',
   comparison: '#a855f7',
+  comparison_ai_agent: '#a855f7',
   migration: '#f59e0b',
   breaking_change: '#f97316',
   new_release: '#06b6d4',
+  security_ai_agent: '#f43f5e',
+  cost_ai_agent: '#eab308',
+  integration_ai_agent: '#14b8a6',
+  customization_ai_agent: '#8b5cf6',
   uncategorized: '#6b7280',
+}
+
+const _FALLBACK_PALETTE = [
+  '#6366f1', '#ec4899', '#10b981', '#f59e0b', '#3b82f6',
+  '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316',
+]
+
+function _strHash(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
+export function getCategoryColor(name: string): string {
+  return CATEGORY_COLORS[name] ?? _FALLBACK_PALETTE[_strHash(name) % _FALLBACK_PALETTE.length]
+}
+
+export function formatCategoryName(name: string): string {
+  return name.replace(/_ai_agent$/i, '').replace(/_/g, ' ')
 }
 
 export function intensityLabel(v: number): string {

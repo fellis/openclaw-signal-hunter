@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { ChevronRight, ExternalLink, Loader2 } from 'lucide-react'
-import { cn, formatRelative, SOURCE_LABELS, CATEGORY_COLORS, SOURCE_COLORS, intensityLabel } from '@/lib/utils'
+import { cn, formatRelative, SOURCE_LABELS, SOURCE_COLORS, intensityLabel, getCategoryColor, formatCategoryName } from '@/lib/utils'
 import { fetchClusters, fetchSignals } from '@/api/report'
-import type { Category, Cluster, Signal, Filters } from '@/types'
+import type { Category, Cluster, Signal, Filters, Rule } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,17 +44,21 @@ function SourcePills({ breakdown }: { breakdown: Record<string, number> }) {
   )
 }
 
-function CategoryBadge({ name }: { name: string }) {
+function CategoryBadge({ name, rules }: { name: string; rules: Rule[] }) {
+  const rule = rules.find(r => r.name === name)
+  const color = getCategoryColor(name)
+  const label = rule ? formatCategoryName(rule.name) : formatCategoryName(name)
   return (
     <span
       className="badge"
+      title={rule?.description}
       style={{
-        background: `${CATEGORY_COLORS[name] ?? '#6b7280'}20`,
-        color: CATEGORY_COLORS[name] ?? '#6b7280',
-        border: `1px solid ${CATEGORY_COLORS[name] ?? '#6b7280'}40`,
+        background: `${color}20`,
+        color,
+        border: `1px solid ${color}40`,
       }}
     >
-      {name.replace(/_/g, ' ')}
+      {label}
     </span>
   )
 }
@@ -294,6 +298,7 @@ function CategoryRow({
   onSort,
   filters,
   lang = 'en',
+  rules = [],
 }: {
   category: Category
   maxRankScore: number
@@ -302,6 +307,7 @@ function CategoryRow({
   onSort: (col: string) => void
   filters: Filters
   lang?: string
+  rules?: Rule[]
 }) {
   const [expanded, setExpanded] = useState(false)
   const [clusters, setClusters] = useState<Cluster[] | null>(null)
@@ -343,7 +349,7 @@ function CategoryRow({
         </td>
         <td className="pr-4 py-2.5" style={{ minWidth: 320 }}>
           <div className="flex items-center gap-2">
-            <CategoryBadge name={category.name} />
+            <CategoryBadge name={category.name} rules={rules} />
             <span className="text-2xs font-medium" style={{ color: 'var(--text-muted)' }}>
               {category.count.toLocaleString()}
             </span>
@@ -400,9 +406,10 @@ interface TableProps {
   categories: Category[]
   filters: Filters
   lang?: string
+  rules?: Rule[]
 }
 
-export default function SignalTable({ categories, filters, lang = 'en' }: TableProps) {
+export default function SignalTable({ categories, filters, lang = 'en', rules = [] }: TableProps) {
   const [sortBy, setSortBy] = useState<SortKey>('rank_score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -484,6 +491,7 @@ export default function SignalTable({ categories, filters, lang = 'en' }: TableP
               onSort={handleSort}
               filters={filters}
               lang={lang}
+              rules={rules}
             />
           ))}
         </tbody>

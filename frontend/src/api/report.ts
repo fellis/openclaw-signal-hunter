@@ -6,6 +6,7 @@ import type {
   TimelinePoint,
   SourceBreakpoint,
   Filters,
+  Rule,
 } from '@/types'
 import { buildQueryString } from '@/lib/utils'
 
@@ -16,8 +17,7 @@ function filtersToParams(f: Partial<Filters>): Record<string, unknown> {
     sources: f.sources || [],
     categories: f.categories || [],
     keywords: f.keywords || [],
-    intensity_min: f.intensity_min ?? '',
-    intensity_max: f.intensity_max ?? '',
+    intensities: f.intensities || [],
     confidence_min: f.confidence_min ?? '',
     confidence_max: f.confidence_max ?? '',
   }
@@ -61,6 +61,13 @@ export async function fetchKeywords(): Promise<string[]> {
   if (!res.ok) return []
   const data = await res.json()
   return data.keywords || []
+}
+
+export async function fetchRules(): Promise<Rule[]> {
+  const res = await fetch('/api/rules')
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.rules || []
 }
 
 export async function fetchStats(): Promise<StatsResponse> {

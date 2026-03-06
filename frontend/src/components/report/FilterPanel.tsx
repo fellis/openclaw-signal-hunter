@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Filter, X, ChevronDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import type { Filters } from '@/types'
+import { cn, formatCategoryName, intensityLabel } from '@/lib/utils'
+import type { Filters, Rule } from '@/types'
 import { fetchKeywords } from '@/api/report'
 
 const SOURCES = [
@@ -13,13 +13,15 @@ const SOURCE_LABELS: Record<string, string> = {
   hn_post: 'Hacker News', so_question: 'Stack Overflow',
   reddit_post: 'Reddit', hf_discussion: 'HuggingFace', hf_paper: 'HF Papers',
 }
-const CATEGORIES = [
-  'pain_point', 'feature_request', 'adoption_signal',
-  'comparison', 'migration', 'breaking_change', 'new_release',
-]
+const INTENSITIES = ['1', '2', '3', '4', '5']
+const INTENSITY_LABELS: Record<string, string> = Object.fromEntries(
+  INTENSITIES.map(v => [v, intensityLabel(Number(v))])
+)
+
 interface Props {
   filters: Filters
   onChange: (f: Partial<Filters>) => void
+  rules: Rule[]
 }
 
 function MultiSelect({
@@ -154,18 +156,23 @@ function RangeFilter({
   )
 }
 
-export default function FilterPanel({ filters, onChange }: Props) {
+export default function FilterPanel({ filters, onChange, rules }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
 
   useEffect(() => {
     fetchKeywords().then(setKeywords)
   }, [])
 
+  const categoryOptions = rules.map(r => r.name)
+  const categoryLabelMap = Object.fromEntries(
+    rules.map(r => [r.name, formatCategoryName(r.name)])
+  )
+
   const activeCount = [
     filters.sources.length,
     filters.categories.length,
     filters.keywords.length,
-    filters.intensity_min !== null || filters.intensity_max !== null ? 1 : 0,
+    filters.intensities.length,
     filters.confidence_min !== null || filters.confidence_max !== null ? 1 : 0,
     filters.date_from ? 1 : 0,
     filters.date_to ? 1 : 0,
@@ -173,8 +180,7 @@ export default function FilterPanel({ filters, onChange }: Props) {
 
   const clearAll = () =>
     onChange({
-      sources: [], categories: [], keywords: [],
-      intensity_min: null, intensity_max: null,
+      sources: [], categories: [], keywords: [], intensities: [],
       confidence_min: null, confidence_max: null,
       date_from: '', date_to: '',
     })
@@ -219,9 +225,10 @@ export default function FilterPanel({ filters, onChange }: Props) {
       />
       <MultiSelect
         label="Category"
-        options={CATEGORIES}
+        options={categoryOptions}
         selected={filters.categories}
         onChange={v => onChange({ categories: v })}
+        labelMap={categoryLabelMap}
       />
       <MultiSelect
         label="Keyword"
@@ -229,13 +236,12 @@ export default function FilterPanel({ filters, onChange }: Props) {
         selected={filters.keywords}
         onChange={v => onChange({ keywords: v })}
       />
-      <RangeFilter
+      <MultiSelect
         label="Intensity"
-        min={1} max={5} step={1}
-        valueMin={filters.intensity_min}
-        valueMax={filters.intensity_max}
-        onChangeMin={v => onChange({ intensity_min: v })}
-        onChangeMax={v => onChange({ intensity_max: v })}
+        options={INTENSITIES}
+        selected={filters.intensities.map(String)}
+        onChange={v => onChange({ intensities: v.map(Number) })}
+        labelMap={INTENSITY_LABELS}
       />
       <RangeFilter
         label="Confidence"
