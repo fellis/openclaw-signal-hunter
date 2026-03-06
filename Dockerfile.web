@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source
 COPY web_server/ ./web_server/
+COPY storage/ ./storage/
 
 # Copy pre-built frontend from stage 1
 COPY --from=frontend-builder /app/web_server/static ./web_server/static
