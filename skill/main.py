@@ -441,29 +441,21 @@ def cmd_run_worker(json_str: str = "{}") -> None:
     NOTE: embedding classification runs in a SEPARATE embed worker cron
     (cmd_run_embed_worker). This worker is LLM-only.
     """
-    from core.llm_worker import LLMWorker  # noqa: PLC0415
+    from core.llm_worker import LLMWorker        # noqa: PLC0415
+    from core.translate_worker import TranslateWorker  # noqa: PLC0415
 
     config = _load_config()
     storage = _make_storage()
-    worker = LLMWorker(config, storage)
-    result = worker.run_loop()
-    _out(result)
 
+    llm_result = LLMWorker(config, storage).run_loop()
 
-def cmd_run_translate_worker(json_str: str = "{}") -> None:
-    """
-    Translate Worker: translates title + summary of embedded signals to target language.
-    Processes one batch per cron tick (TRANSLATE_BATCH_SIZE signals, default 32).
-    Skips signals already in the target language.
-    Stores results in signal_translations table.
-    Called by cron every 5 minutes.
-    """
-    from core.translate_worker import TranslateWorker  # noqa: PLC0415
+    # Run one translation batch on the same tick (no separate cron needed).
+    try:
+        tr_result = TranslateWorker(storage).run()
+    except Exception as exc:
+        tr_result = {"status": "error", "error": str(exc)}
 
-    storage = _make_storage()
-    worker = TranslateWorker(storage)
-    result = worker.run()
-    _out({"phase": "translate", **result})
+    _out({**llm_result, "translation": tr_result})
 
 
 def cmd_run_embed_worker(json_str: str = "{}") -> None:
@@ -1010,7 +1002,6 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_routing":              (cmd_set_routing, True),
     "run_worker":               (cmd_run_worker, False),
     "run_embed_worker":         (cmd_run_embed_worker, False),
-    "run_translate_worker":     (cmd_run_translate_worker, False),
     "set_embed_worker_interval": (cmd_set_embed_worker_interval, False),
     "queue_resolve":            (cmd_queue_resolve, True),
     "queue_status":             (cmd_queue_status, False),
