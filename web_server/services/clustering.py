@@ -1,7 +1,25 @@
 """
 Semantic clustering service.
-Groups signals by cosine similarity of their Qdrant vectors.
-Names clusters with a single local LLM call.
+
+Uses the Strategy pattern so clustering implementations can be swapped
+without touching callers. Active strategy is selected via the
+CLUSTERING_STRATEGY env variable (default: "kmeans").
+
+Supported strategies
+--------------------
+kmeans  - Spherical Mini-batch K-Means (sklearn). Recommended.
+          Equivalent to cosine K-Means because vectors are L2-normalised.
+          k = min(MAX_CLUSTERS, max(MIN_CLUSTERS, sqrt(n_vectorised))).
+
+greedy  - Original greedy cosine clustering (O(n^2)). Kept for reference
+          and small datasets (<200 signals).
+
+Configuration via env
+---------------------
+CLUSTERING_STRATEGY   "kmeans" | "greedy"   default: "kmeans"
+MAX_CLUSTERS          int                    default: 50
+MIN_CLUSTERS          int                    default: 5
+GREEDY_THRESHOLD      float                  default: 0.72
 """
 
 from __future__ import annotations
@@ -10,6 +28,8 @@ import hashlib
 import json
 import logging
 import os
+from abc import ABC, abstractmethod
+from math import isqrt
 from typing import Any
 
 import numpy as np
@@ -18,6 +38,10 @@ log = logging.getLogger(__name__)
 
 COLLECTION = "signals"
 
+
+# ---------------------------------------------------------------------------
+# ID helpers
+# ---------------------------------------------------------------------------
 
 def uuid_to_qdrant_id(raw_signal_id: str) -> int:
     """Same hash as embedder.py - must stay in sync."""
@@ -53,52 +77,206 @@ def fetch_vectors(signal_ids: list[str]) -> dict[str, list[float]]:
         return {}
 
 
-def greedy_cluster(
-    signal_ids: list[str],
-    vectors: dict[str, list[float]],
-    threshold: float = 0.75,
-) -> dict[int, list[str]]:
+# ---------------------------------------------------------------------------
+# Abstract strategy
+# ---------------------------------------------------------------------------
+
+class ClusteringStrategy(ABC):
     """
-    Greedy cosine clustering of signals with known vectors.
-    Signals without vectors are placed in their own singleton clusters.
-    Returns {cluster_id: [raw_signal_id, ...]}.
+    Contract for all clustering implementations.
+    Signals without vectors are excluded from clustering and returned
+    separately so callers can handle them (e.g. put in an "Other" group).
     """
-    ids_with_vec = [sid for sid in signal_ids if sid in vectors]
-    ids_without_vec = [sid for sid in signal_ids if sid not in vectors]
 
-    clusters: dict[int, list[str]] = {}
-    cluster_id = 0
+    @abstractmethod
+    def cluster(
+        self,
+        signal_ids: list[str],
+        vectors: dict[str, list[float]],
+    ) -> dict[int, list[str]]:
+        """
+        Cluster signals that have vectors.
+        Signals without vectors are placed together in the last cluster.
 
-    if ids_with_vec:
-        arr = np.array([vectors[sid] for sid in ids_with_vec], dtype=np.float32)
-        norms = np.linalg.norm(arr, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        arr = arr / norms
+        Returns
+        -------
+        dict[cluster_id, list[raw_signal_id]]
+        """
 
-        n = len(ids_with_vec)
-        assigned = [False] * n
 
-        for i in range(n):
-            if assigned[i]:
-                continue
-            cluster = [ids_with_vec[i]]
-            assigned[i] = True
-            for j in range(i + 1, n):
-                if assigned[j]:
+# ---------------------------------------------------------------------------
+# Strategy: Greedy cosine (original, O(n^2), kept for reference)
+# ---------------------------------------------------------------------------
+
+class GreedyCosineClustering(ClusteringStrategy):
+    """
+    Original greedy algorithm: for each unassigned signal i, create a cluster
+    and pull in every subsequent j with cosine_similarity(i, j) >= threshold.
+
+    Drawbacks
+    ---------
+    - O(n^2) comparisons - slow for n > 500.
+    - Compares against the anchor (first member), not the centroid.
+    - Produces hundreds of tiny clusters on large inputs.
+
+    Use for small categories (<200 signals) or A/B comparison.
+    """
+
+    def __init__(self, threshold: float = 0.72) -> None:
+        self.threshold = threshold
+
+    def cluster(
+        self,
+        signal_ids: list[str],
+        vectors: dict[str, list[float]],
+    ) -> dict[int, list[str]]:
+        ids_with_vec = [sid for sid in signal_ids if sid in vectors]
+        ids_without_vec = [sid for sid in signal_ids if sid not in vectors]
+
+        clusters: dict[int, list[str]] = {}
+        cluster_id = 0
+
+        if ids_with_vec:
+            arr = np.array([vectors[sid] for sid in ids_with_vec], dtype=np.float32)
+            norms = np.linalg.norm(arr, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            arr = arr / norms
+
+            n = len(ids_with_vec)
+            assigned = [False] * n
+
+            for i in range(n):
+                if assigned[i]:
                     continue
-                sim = float(np.dot(arr[i], arr[j]))
-                if sim >= threshold:
-                    cluster.append(ids_with_vec[j])
-                    assigned[j] = True
-            clusters[cluster_id] = cluster
-            cluster_id += 1
+                cluster = [ids_with_vec[i]]
+                assigned[i] = True
+                for j in range(i + 1, n):
+                    if assigned[j]:
+                        continue
+                    if float(np.dot(arr[i], arr[j])) >= self.threshold:
+                        cluster.append(ids_with_vec[j])
+                        assigned[j] = True
+                clusters[cluster_id] = cluster
+                cluster_id += 1
 
-    # Signals without vectors go into one "other" cluster if any exist
-    if ids_without_vec:
-        clusters[cluster_id] = ids_without_vec
+        if ids_without_vec:
+            clusters[cluster_id] = ids_without_vec
 
-    return clusters
+        return clusters
 
+
+# ---------------------------------------------------------------------------
+# Strategy: Spherical Mini-batch K-Means (recommended)
+# ---------------------------------------------------------------------------
+
+class KMeansClustering(ClusteringStrategy):
+    """
+    Spherical K-Means via sklearn MiniBatchKMeans on L2-normalised vectors.
+    Normalisation makes euclidean distance equivalent to cosine distance,
+    so this effectively performs cosine K-Means.
+
+    k is chosen automatically:
+        k = min(max_clusters, max(min_clusters, isqrt(n_vectorised)))
+
+    Signals without vectors are placed in a trailing cluster so they are
+    still reachable, but their cluster is unnamed ("Other").
+
+    Advantages over greedy
+    ----------------------
+    - O(k * n * iterations) - orders of magnitude faster.
+    - Centroid is updated with every new member (no anchor drift).
+    - Predictable, bounded cluster count.
+    - Deterministic (fixed random_state).
+    """
+
+    def __init__(
+        self,
+        max_clusters: int = 50,
+        min_clusters: int = 5,
+    ) -> None:
+        self.max_clusters = max_clusters
+        self.min_clusters = min_clusters
+
+    def _choose_k(self, n: int) -> int:
+        return min(self.max_clusters, max(self.min_clusters, isqrt(n)))
+
+    def cluster(
+        self,
+        signal_ids: list[str],
+        vectors: dict[str, list[float]],
+    ) -> dict[int, list[str]]:
+        from sklearn.cluster import MiniBatchKMeans  # noqa: PLC0415
+
+        ids_with_vec = [sid for sid in signal_ids if sid in vectors]
+        ids_without_vec = [sid for sid in signal_ids if sid not in vectors]
+
+        clusters: dict[int, list[str]] = {}
+
+        if ids_with_vec:
+            arr = np.array([vectors[sid] for sid in ids_with_vec], dtype=np.float32)
+            norms = np.linalg.norm(arr, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            arr = arr / norms  # unit vectors -> cosine ~ euclidean
+
+            k = self._choose_k(len(ids_with_vec))
+            # Ensure k does not exceed number of samples
+            k = min(k, len(ids_with_vec))
+
+            model = MiniBatchKMeans(
+                n_clusters=k,
+                random_state=42,
+                batch_size=min(1024, len(ids_with_vec)),
+                n_init=3,
+            )
+            labels = model.fit_predict(arr)
+
+            for i, sid in enumerate(ids_with_vec):
+                cid = int(labels[i])
+                clusters.setdefault(cid, []).append(sid)
+
+        # Signals without vectors go into a trailing "other" cluster
+        if ids_without_vec:
+            other_id = max(clusters.keys(), default=-1) + 1
+            clusters[other_id] = ids_without_vec
+
+        log.info(
+            "[clustering] KMeans: %d signals -> %d clusters (vectorised: %d, no-vec: %d)",
+            len(signal_ids),
+            len(clusters),
+            len(ids_with_vec),
+            len(ids_without_vec),
+        )
+        return clusters
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+def get_clustering_strategy(name: str | None = None) -> ClusteringStrategy:
+    """
+    Return a configured ClusteringStrategy.
+    Strategy name is resolved from argument, then CLUSTERING_STRATEGY env var,
+    then defaults to "kmeans".
+    """
+    resolved = (name or os.environ.get("CLUSTERING_STRATEGY", "kmeans")).lower()
+
+    if resolved == "greedy":
+        threshold = float(os.environ.get("GREEDY_THRESHOLD", "0.72"))
+        log.info("[clustering] Strategy: GreedyCosine (threshold=%.2f)", threshold)
+        return GreedyCosineClustering(threshold=threshold)
+
+    max_clusters = int(os.environ.get("MAX_CLUSTERS", "50"))
+    min_clusters = int(os.environ.get("MIN_CLUSTERS", "5"))
+    log.info(
+        "[clustering] Strategy: KMeans (max=%d, min=%d)", max_clusters, min_clusters
+    )
+    return KMeansClustering(max_clusters=max_clusters, min_clusters=min_clusters)
+
+
+# ---------------------------------------------------------------------------
+# LLM cluster naming
+# ---------------------------------------------------------------------------
 
 def name_clusters(
     clusters: dict[int, list[str]],
@@ -106,7 +284,7 @@ def name_clusters(
 ) -> dict[int, str]:
     """
     Generate descriptive names for all clusters using the local LLM.
-    Falls back to 'Cluster N' on any error.
+    Falls back to first signal title on any error.
     Returns {cluster_id: name}.
     """
     if not clusters:
@@ -178,6 +356,10 @@ def _fallback_names(
             names[cid] = f"Cluster {cid + 1}"
     return names
 
+
+# ---------------------------------------------------------------------------
+# Cache key helper
+# ---------------------------------------------------------------------------
 
 def build_cluster_key(signal_ids: list[str]) -> str:
     """Stable cache key for a set of signal IDs."""

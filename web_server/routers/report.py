@@ -18,7 +18,7 @@ from web_server.db import fetchall, fetchone
 from web_server.services.clustering import (
     build_cluster_key,
     fetch_vectors,
-    greedy_cluster,
+    get_clustering_strategy,
     name_clusters,
 )
 
@@ -273,7 +273,8 @@ async def get_clusters(
 
     # Fetch vectors and cluster
     vectors = fetch_vectors(signal_ids)
-    clusters = greedy_cluster(signal_ids, vectors, threshold=0.72)
+    strategy = get_clustering_strategy()
+    clusters = strategy.cluster(signal_ids, vectors)
 
     # Get or compute names
     if cached_names is not None:
