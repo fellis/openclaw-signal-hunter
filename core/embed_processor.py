@@ -303,6 +303,7 @@ class EmbedProcessor:
             intensity=intensity,
             confidence=confidence,
             score=raw.get("score", 0) or 0,
+            comments_count=raw.get("comments_count", 0) or 0,
             created_at=raw.get("created_at"),
         )
 
@@ -334,14 +335,16 @@ class EmbedProcessor:
         confidence: float,
         score: int,
         created_at: datetime | None,
+        comments_count: int = 0,
     ) -> float:
-        """Same formula as Processor - rank_score = quality * time_decay."""
+        """Same formula as Processor - rank_score = (engagement + quality) * time_decay."""
         now = datetime.now(timezone.utc)
         if created_at and created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
         hours_ago = (now - created_at).total_seconds() / 3600.0 if created_at else 0
 
-        engagement = 0.3 * math.log10(1 + max(0, score))
+        engagement_raw = max(0, score) + 0.5 * max(0, comments_count)
+        engagement = 0.3 * math.log10(1 + engagement_raw)
         quality = 0.7 * (intensity / 5.0) * confidence
         decay = 0.5 ** (hours_ago / 168.0)
         return round((engagement + quality) * decay, 4)

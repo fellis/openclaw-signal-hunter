@@ -148,7 +148,7 @@ class PostgresStorage:
                     cur.execute(
                         """
                         SELECT r.id, r.dedup_key, r.title, r.body,
-                               r.score, r.created_at, r.extra
+                               r.score, r.comments_count, r.created_at, r.extra
                         FROM raw_signals r
                         LEFT JOIN processed_signals p ON p.raw_signal_id = r.id
                         WHERE p.id IS NULL
@@ -185,7 +185,7 @@ class PostgresStorage:
                     cur.execute(
                         """
                         SELECT r.id, r.dedup_key, r.title, r.body,
-                               r.score, r.created_at, r.extra
+                               r.score, r.comments_count, r.created_at, r.extra
                         FROM raw_signals r
                         LEFT JOIN processed_signals p ON p.raw_signal_id = r.id
                         WHERE p.id IS NULL

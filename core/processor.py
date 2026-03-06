@@ -293,6 +293,7 @@ Return ONLY the JSON array, no markdown, no explanation.
             intensity=intensity,
             confidence=confidence,
             score=raw.get("score", 0) or 0,
+            comments_count=raw.get("comments_count", 0) or 0,
             created_at=raw.get("created_at"),
         )
 
@@ -325,19 +326,23 @@ Return ONLY the JSON array, no markdown, no explanation.
         confidence: float,
         score: int,
         created_at: datetime | None,
+        comments_count: int = 0,
     ) -> float:
         """
-        rank_score = (0.3 * log10(1+score) + 0.7 * (intensity/5) * confidence)
+        rank_score = (0.3 * log10(1 + score + 0.5*comments) + 0.7 * (intensity/5) * confidence)
                      * 0.5^(hours_ago / 168)
 
-        Validated in spike Phase 1. Weights: engagement=0.3, quality=0.7, half_life=7d.
+        comments_count gets half the weight of score: for sources where score is
+        weak (e.g. GitHub reactions ~0-3), comments are the primary engagement signal.
+        Weights: engagement=0.3, quality=0.7, half_life=7d.
         """
         now = datetime.now(timezone.utc)
         if created_at and created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
         hours_ago = (now - created_at).total_seconds() / 3600.0 if created_at else 0
 
-        engagement = 0.3 * math.log10(1 + max(0, score))
+        engagement_raw = max(0, score) + 0.5 * max(0, comments_count)
+        engagement = 0.3 * math.log10(1 + engagement_raw)
         quality = 0.7 * (intensity / 5.0) * confidence
         decay = 0.5 ** (hours_ago / 168.0)
         return round((engagement + quality) * decay, 4)
