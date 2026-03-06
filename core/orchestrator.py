@@ -174,17 +174,20 @@ class Orchestrator:
     def embed_pending(self, device: str = "cpu") -> dict[str, Any]:
         """
         Vectorize all pending signals in embedding_queue.
+        Uses embedder_vectorizer config if present (dedicated container on separate port),
+        falls back to embedder config so classification and vectorization don't compete.
         Returns {total: int}.
         """
         vector = VectorStorage()
         embedder_cfg = self._config.get("embedder", {})
+        vectorizer_cfg = self._config.get("embedder_vectorizer", embedder_cfg)
         embedder = Embedder(
             storage=self._storage,
             vector=vector,
-            batch_size=embedder_cfg.get("batch_size", 64),
+            batch_size=vectorizer_cfg.get("batch_size", embedder_cfg.get("batch_size", 64)),
             device=device,
-            service_url=embedder_cfg.get("service_url"),
-            max_items=embedder_cfg.get("max_items_per_run", 512),
+            service_url=vectorizer_cfg.get("service_url", embedder_cfg.get("service_url")),
+            max_items=vectorizer_cfg.get("max_items_per_run", embedder_cfg.get("max_items_per_run", 512)),
         )
         _emit({"status": "running", "phase": "embed"})
         total = embedder.embed_pending()

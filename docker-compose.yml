@@ -44,6 +44,21 @@ services:
       retries: 5
       start_period: 60s
 
+  embedder-vectorizer:
+    build: .
+    ports:
+      - "6336:6336"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+    command: ["uvicorn", "embedder_service:app", "--host", "0.0.0.0", "--port", "6336"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6336/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
 volumes:
   pgdata:
   qdrantdata:
