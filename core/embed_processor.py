@@ -243,13 +243,16 @@ class EmbedProcessor:
                 rule_sims.append(float(sims.max()))
 
             max_sim = max(rule_sims) if rule_sims else 0.0
-            is_relevant = max_sim >= self._relevance_threshold
 
             matched_rule_names = [
                 self._rules[j].name
                 for j, sim in enumerate(rule_sims)
                 if sim >= self._rule_threshold
             ]
+
+            # Signal is relevant only if it passes the threshold AND matches at least one rule.
+            # This prevents generic on-topic content (e.g. AI news) from flooding the feed.
+            is_relevant = max_sim >= self._relevance_threshold and len(matched_rule_names) > 0
 
             results.append({
                 "is_relevant": is_relevant,
