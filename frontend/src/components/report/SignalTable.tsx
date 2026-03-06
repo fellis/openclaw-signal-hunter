@@ -158,8 +158,15 @@ function SignalRow({ signal }: { signal: Signal }) {
       <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
         {signal.comments_count}
       </td>
-      <td className="pr-4 py-2.5 text-xs" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-        {formatRelative(signal.created_at)}
+      <td className="pr-4 py-2.5" style={{ whiteSpace: 'nowrap' }}>
+        <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
+          {formatRelative(signal.created_at)}
+        </div>
+        {signal.collected_at && signal.collected_at !== signal.created_at && (
+          <div className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+            collected {formatRelative(signal.collected_at)}
+          </div>
+        )}
       </td>
     </tr>
   )

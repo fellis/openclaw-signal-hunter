@@ -56,8 +56,15 @@ function ResultRow({ result, mode }: { result: SearchResult; mode: Mode }) {
           )}
         </div>
 
-        <div className="text-right shrink-0 space-y-1">
-          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{formatRelative(result.created_at)}</div>
+        <div className="text-right shrink-0 space-y-1" style={{ minWidth: 90 }}>
+          <div className="text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
+            {formatRelative(result.created_at)}
+          </div>
+          {result.collected_at && result.collected_at !== result.created_at && (
+            <div className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+              collected {formatRelative(result.collected_at)}
+            </div>
+          )}
           <div className="text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
             ↑{result.score} · {result.comments_count}💬
           </div>
