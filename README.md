@@ -11,7 +11,7 @@ You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 1. **Discovers** where the topic is discussed (repos, subreddits, HF models, SO tags) via real API calls - no LLM guessing
 2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested aliases and search queries
 3. **Collects automatically** - every 24h per keyword via a dedicated Collect Worker cron (GitHub, HF, HN, SO, Reddit), expanding the plan with newly appeared repos/spaces on each run
-4. **Classifies** every signal with a local LLM using your extraction rules (pain points, feature requests, comparisons, adoption...)
+4. **Classifies** every signal using embedding cosine similarity against your extraction rules - fast local inference, no GPU required for classify. LLM generates a short summary only for relevant signals
 5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
 7. **Generates change reports** - weekly/monthly deltas with what's new and what grew
@@ -30,7 +30,7 @@ Everything runs on a VPS, fully offline (except for API calls to data sources an
 | **Qdrant** | Vector search (cosine, 1024 dims) |
 | **BAAI/bge-m3** | Cross-lingual embeddings via `sentence-transformers` |
 | **Embedder service** | FastAPI Docker container - bge-m3 loaded once, serves HTTP /embed |
-| **Local LLM** | Classification, rule suggestions (OpenAI-compatible endpoint) |
+| **Local LLM** | Summary generation, rule suggestions, keyword enrichment (OpenAI-compatible endpoint) |
 | **Claude (Anthropic)** | Queries, resolution strategy (configurable) |
 | **Docker Compose** | PostgreSQL + Qdrant + Embedder service |
 
@@ -51,7 +51,8 @@ skill/main.py         ← CLI dispatcher
      │
      ├── core/resolver.py      ← keyword discovery + LLM enrichment
      ├── core/orchestrator.py  ← collect → embed pipeline
-     ├── core/processor.py     ← LLM classification (token-aware batching)
+     ├── core/embed_processor.py ← embedding classify + LLM summary (default)
+     ├── core/processor.py     ← LLM classification fallback (mode: "llm")
      ├── core/embedder.py      ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py    ← routes ops to local/Claude by config
      ├── core/llm_worker.py    ← LLM task queue worker (resolve + process_batch only)
@@ -367,8 +368,10 @@ You: process
 ```
 
 ```
-ClawBot: Classifying 1688 signals with local LLM... (10 signals/batch, token-aware)
+ClawBot: Classifying 1688 signals (embed mode)...
 ✓ Done. 1453 classified (relevant: 734, irrelevant: 719)
+  - Classify: embedding cosine similarity (~0.1s/signal)
+  - Summaries: LLM for 734 relevant signals (~1.5s each)
 ```
 
 Embedding happens automatically via the cron job (every 10 minutes). To run immediately:
@@ -451,7 +454,7 @@ Three cron jobs run continuously and independently:
 
 | Cron | Schedule | What it does |
 |---|---|---|
-| **LLM Worker** | `* * * * *` (every 1 min) | resolve + process_batch (LLM-only, no API calls) |
+| **LLM Worker** | `* * * * *` (every 1 min) | resolve + process_batch (embed classify + LLM summary, no API collection) |
 | **Collect Worker** | `*/5 * * * *` (every 5 min) | picks 1 stalest keyword, fetches signals (no LLM) |
 | **Embed** | `*/10 * * * *` (every 10 min) | vectorizes classified signals into Qdrant |
 
@@ -568,9 +571,11 @@ Key sections:
   },
   "extraction_rules": [],
   "processor": {
-    "max_signals_per_batch": 10,
-    "max_batches_per_run": 3,
-    "max_tokens_per_batch": 20000,
+    "mode": "embed",
+    "relevance_threshold": 0.40,
+    "rule_threshold": 0.42,
+    "embed_batch_size": 32,
+    "summary_batch_size": 5,
     "max_body_chars": 1000
   },
   "embedder": {
@@ -601,10 +606,12 @@ Key sections:
 }
 ```
 
-**`processor` limits explained:**
-- `max_signals_per_batch: 10` - signals per LLM call. At ~37 tok/s with 200 output tokens/signal: 10 × 200 = ~54s. Safe under a 60s nginx timeout. Increase only after raising `proxy_read_timeout`.
-- `max_batches_per_run: 3` - LLM batches per cron execution. Controls how much work one cron run does (3 × 10 = 30 signals/run).
-- `max_tokens_per_batch: 20000` - input token budget per LLM batch (body truncated via `max_body_chars`).
+**`processor` settings explained:**
+- `mode: "embed"` - use embedding cosine similarity for classify + LLM for summary only. Set to `"llm"` to revert to full LLM classification.
+- `relevance_threshold: 0.40` - minimum cosine similarity to consider a signal relevant (validated F1=94.7%).
+- `rule_threshold: 0.42` - minimum similarity to assign a rule to a signal (per-rule recall 90-100%).
+- `embed_batch_size: 32` - signals per embedder HTTP call during classify.
+- `summary_batch_size: 5` - relevant signals per LLM summary call.
 
 **`embedder` settings explained:**
 - `service_url` - HTTP endpoint of the embedder Docker container. If unreachable, falls back to loading bge-m3 locally.

@@ -22,7 +22,6 @@ class SourceType(str, Enum):
     HN_COMMENT = "hn_comment"
     SO_QUESTION = "so_question"
     SO_ANSWER = "so_answer"
-    PH_POST = "ph_post"
     HF_DISCUSSION = "hf_discussion"
 
 
