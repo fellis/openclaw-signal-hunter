@@ -99,6 +99,53 @@ class HuggingFaceCollector(BaseCollector):
 
         return SearchPlan(targets=targets, max_results_per_target=_DISCUSSION_LIMIT)
 
+    def discover_new_sources(
+        self,
+        profile: KeywordProfile,
+        existing_plan: SearchPlan,
+    ) -> list[SearchTarget]:
+        """
+        Search HF Hub for models and spaces not yet in the existing plan.
+        Uses canonical_name + aliases from the enriched profile.
+        Returns new discussion targets only.
+        """
+        existing_repo_ids = {
+            t.params.get("repo_id", "")
+            for t in existing_plan.targets
+            if t.scope == "discussions"
+        }
+
+        queries = [profile.canonical_name] + profile.aliases[:2]
+        found: dict[str, dict] = {}
+
+        for q in queries:
+            for repo in self._search_models(q, limit=_MODEL_LIMIT):
+                rid = repo.get("id", "")
+                if rid and rid not in existing_repo_ids and rid not in found:
+                    found[rid] = repo
+            time.sleep(_RATE_LIMIT_PAUSE)
+            for repo in self._search_spaces(q, limit=5):
+                rid = repo.get("id", "")
+                if rid and rid not in existing_repo_ids and rid not in found:
+                    found[rid] = repo
+            time.sleep(_RATE_LIMIT_PAUSE)
+
+        new_targets = [
+            SearchTarget(
+                query=rid,
+                scope="discussions",
+                params={"repo_id": rid, "repo_type": repo.get("type", "model")},
+            )
+            for rid, repo in found.items()
+        ]
+
+        if new_targets:
+            log.info(
+                "[hf] discover_new_sources: %d new space/model(s) for '%s'",
+                len(new_targets), profile.canonical_name,
+            )
+        return new_targets
+
     def collect(
         self, plan: SearchPlan, cursors: dict[str, CursorState]
     ) -> CollectResult:
