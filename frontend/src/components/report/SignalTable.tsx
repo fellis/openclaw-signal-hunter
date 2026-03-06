@@ -8,21 +8,18 @@ import type { Category, Cluster, Signal, Filters } from '@/types'
 // Helpers
 // ---------------------------------------------------------------------------
 
-function RankBar({ avg, total }: { avg: number; total: number }) {
-  const pct = Math.min(100, Math.max(0, avg * 100))
+// value  - actual rank_score (sum for category/cluster, raw for signal)
+// max    - max in current list, used for bar fill scaling
+function RankBar({ value, max }: { value: number; max: number }) {
+  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
   return (
     <div className="flex items-center gap-1.5">
       <div className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-3)' }}>
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'var(--accent)' }} />
       </div>
-      <div className="flex flex-col leading-none">
-        <span className="text-2xs tabular-nums font-medium" style={{ color: 'var(--text-2)' }}>
-          {total.toFixed(1)}
-        </span>
-        <span className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-          avg {avg.toFixed(2)}
-        </span>
-      </div>
+      <span className="text-2xs tabular-nums font-medium" style={{ color: 'var(--text-2)' }}>
+        {value.toFixed(1)}
+      </span>
     </div>
   )
 }
@@ -134,7 +131,7 @@ function SignalRow({ signal }: { signal: Signal }) {
         </span>
       </td>
         <td className="pr-4 py-2.5">
-          <RankBar avg={signal.rank_score} total={signal.rank_score} />
+          <RankBar value={signal.rank_score} max={1} />
         </td>
       <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
         {intensityLabel(signal.intensity)}
@@ -161,11 +158,13 @@ function SignalRow({ signal }: { signal: Signal }) {
 
 function ClusterRow({
   cluster,
+  maxRankScore,
   sortBy,
   sortDir,
   onSort,
 }: {
   cluster: Cluster
+  maxRankScore: number
   sortBy: SortKeyL3
   sortDir: 'asc' | 'desc'
   onSort: (col: string) => void
@@ -214,7 +213,7 @@ function ClusterRow({
           <SourcePills breakdown={cluster.sources_breakdown} />
         </td>
         <td className="pr-4 py-2.5">
-          <RankBar avg={cluster.avg_rank_score} total={cluster.rank_score} />
+          <RankBar value={cluster.rank_score} max={maxRankScore} />
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
           {intensityLabel(cluster.avg_intensity)}
@@ -246,12 +245,14 @@ function ClusterRow({
 
 function CategoryRow({
   category,
+  maxRankScore,
   sortBy,
   sortDir,
   onSort,
   filters,
 }: {
   category: Category
+  maxRankScore: number
   sortBy: SortKey
   sortDir: 'asc' | 'desc'
   onSort: (col: string) => void
@@ -308,7 +309,7 @@ function CategoryRow({
           <SourcePills breakdown={category.sources_breakdown} />
         </td>
         <td className="pr-4 py-2.5">
-          <RankBar avg={category.avg_rank_score} total={category.rank_score} />
+          <RankBar value={category.rank_score} max={maxRankScore} />
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
           {intensityLabel(category.avg_intensity)}
@@ -327,15 +328,19 @@ function CategoryRow({
         </td>
       </tr>
 
-      {expanded && clusters && clusters.map(c => (
-        <ClusterRow
-          key={c.id}
-          cluster={c}
-          sortBy={clusterSort}
-          sortDir={clusterSortDir}
-          onSort={handleClusterSort}
-        />
-      ))}
+      {expanded && clusters && (() => {
+        const maxClusters = Math.max(...clusters.map(c => c.rank_score), 1)
+        return clusters.map(c => (
+          <ClusterRow
+            key={c.id}
+            cluster={c}
+            maxRankScore={maxClusters}
+            sortBy={clusterSort}
+            sortDir={clusterSortDir}
+            onSort={handleClusterSort}
+          />
+        ))
+      })()}
     </>
   )
 }
@@ -357,6 +362,8 @@ export default function SignalTable({ categories, filters }: TableProps) {
     if (col === sortBy) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
     else { setSortBy(col as SortKey); setSortDir('desc') }
   }
+
+  const maxRankScore = Math.max(...categories.map(c => c.rank_score), 1)
 
   const sorted = [...categories].sort((a, b) => {
     const av = a[sortBy] ?? 0
@@ -383,7 +390,7 @@ export default function SignalTable({ categories, filters }: TableProps) {
               </span>
             </th>
             <th className="text-left pr-4 py-2.5">
-              <SortHeader label="Rank Score (Σ / avg)" col="rank_score" {...colProps} />
+              <SortHeader label="Rank Score (Σ)" col="rank_score" {...colProps} />
             </th>
             <th className="text-left pr-4 py-2.5">
               <SortHeader label="Intensity" col="avg_intensity" {...colProps} />
@@ -411,6 +418,7 @@ export default function SignalTable({ categories, filters }: TableProps) {
             <CategoryRow
               key={cat.name}
               category={cat}
+              maxRankScore={maxRankScore}
               sortBy={sortBy}
               sortDir={sortDir}
               onSort={handleSort}
