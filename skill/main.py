@@ -192,6 +192,29 @@ def cmd_update_plan(json_str: str) -> None:
         _err(str(e))
 
 
+def cmd_collect_keyword(json_str: str) -> None:
+    """
+    Collect signals for a single keyword from its approved collection plans.
+    Called as a background subprocess by the LLM worker for stale keywords.
+    Updates last_collected_at on completion.
+    """
+    import json as _json  # noqa: PLC0415
+    from core.orchestrator import Orchestrator  # noqa: PLC0415
+
+    payload = _json.loads(json_str) if json_str.strip() else {}
+    keyword = payload.get("keyword", "")
+    if not keyword:
+        _err("collect_keyword: missing 'keyword' in payload")
+        return
+
+    config = _load_config()
+    storage = _make_storage()
+    orch = Orchestrator(config, storage)
+    result = orch.collect(keywords=[keyword])
+    storage.update_keyword_collected_at(keyword)
+    _out({"status": "done", "phase": "collect", "keyword": keyword, **result})
+
+
 def cmd_embed() -> None:
     """Embed pending signals into Qdrant."""
     from core.orchestrator import Orchestrator  # noqa: PLC0415
@@ -905,6 +928,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "refresh_profile":          (cmd_refresh_profile, True),
     "approve_plan":             (cmd_approve_plan, True),
     "update_plan":              (cmd_update_plan, True),
+    "collect_keyword":          (cmd_collect_keyword, True),
     "embed":                    (cmd_embed, False),
     "reprocess":                (cmd_reprocess, True),
     "query":                    (cmd_query, True),

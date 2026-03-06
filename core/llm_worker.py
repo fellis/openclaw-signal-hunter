@@ -4,17 +4,20 @@ Processes tasks from llm_task_queue sequentially, one at a time.
 Called by cron via skill command 'run_worker'.
 
 Task types and priorities (lower = higher priority):
-  - resolve:          50  - enrich keyword with LLM, create collection plan
-  - collect_keyword:  70  - collect signals for one keyword (max once per 24h)
-  - process_batch:    90  - LLM classify a batch of unprocessed signals
+  - resolve:       50  - enrich keyword with LLM, create collection plan
+  - process_batch: 90  - LLM classify a batch of unprocessed signals
 
-Worker auto-enqueue logic (runs every tick before claiming next task):
-  1. For each keyword with approved plan and last_collected_at > 24h (or NULL):
-     enqueue collect_keyword if not already pending/running (up to 3 per tick)
-  2. If unprocessed signals exist and no process_batch pending: enqueue process_batch
+Collection is NOT in the LLM queue. Instead, the worker spawns independent
+subprocesses (fire & forget) for each stale keyword so the LLM never idles
+waiting for API calls to GitHub/Reddit/HN/SO/HF.
 
-Worker guarantees:
-  - Only one task runs at a time (has_running_llm_task check)
+Worker auto-spawn logic (runs every tick before claiming LLM task):
+  - Up to 3 stale keywords (last_collected_at > 24h or NULL) per tick
+  - Marks last_collected_at = now() immediately (acts as a 24h lock)
+  - Spawn: python -m skill collect_keyword {"keyword": "..."}
+
+Worker guarantees (LLM tasks only):
+  - Only one LLM task runs at a time (has_running_llm_task check)
   - Retries failed tasks up to 3 times before marking as 'failed'
   - Resets tasks stuck in 'running' for > 10 minutes
   - Loops within one cron tick until time budget is exhausted
@@ -23,6 +26,9 @@ Worker guarantees:
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import sys
 import time
 from typing import Any
 
@@ -59,22 +65,15 @@ class LLMWorker:
         if reset:
             log.warning("[llm_worker] reset %d stuck task(s)", reset)
 
+        # Spawn collect subprocesses for stale keywords (fire & forget, non-blocking)
+        # Done once per tick outside the LLM loop so LLM never waits for API calls
+        self._spawn_stale_collects()
+
         while time.monotonic() < deadline:
             # Skip if another task is already running (shouldn't happen in loop, but safety check)
             if self._storage.has_running_llm_task():
                 log.warning("[llm_worker] unexpected running task, stopping loop")
                 break
-
-            # Auto-enqueue collect_keyword for stale keywords (not collected in 24h)
-            stale = self._storage.get_stale_keywords(min_age_hours=24, limit=3)
-            for kw in stale:
-                if not self._storage.has_pending_collect_for(kw):
-                    self._storage.enqueue_llm_task(
-                        task_type="collect_keyword",
-                        priority=70,
-                        payload={"keyword": kw},
-                    )
-                    log.info("[llm_worker] enqueued collect_keyword for stale keyword '%s'", kw)
 
             # Auto-enqueue process_batch when signals need classification
             if (
@@ -100,8 +99,6 @@ class LLMWorker:
             try:
                 if task_type == "resolve":
                     result = self._handle_resolve(payload)
-                elif task_type == "collect_keyword":
-                    result = self._handle_collect_keyword(payload)
                 elif task_type == "process_batch":
                     result = self._handle_process_batch()
                 else:
@@ -168,22 +165,35 @@ class LLMWorker:
             "sources": list(plans.keys()) if plans else [],
         }
 
-    def _handle_collect_keyword(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _spawn_stale_collects(self, limit: int = 3) -> None:
         """
-        Collect signals for a single keyword using its approved collection plans.
-        Updates last_collected_at on success.
+        Spawn background subprocesses for stale keywords (non-blocking).
+        Marks last_collected_at = now() immediately to prevent double-spawning.
+        The subprocess runs collect and updates last_collected_at again on success.
         """
-        from core.orchestrator import Orchestrator  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
 
-        keyword = payload.get("keyword", "")
-        if not keyword:
-            raise ValueError("collect_keyword task missing 'keyword' in payload")
+        stale = self._storage.get_stale_keywords(min_age_hours=24, limit=limit)
+        if not stale:
+            return
 
-        orch = Orchestrator(self._config, self._storage)
-        result = orch.collect(keywords=[keyword])
-        self._storage.update_keyword_collected_at(keyword)
-        log.info("[llm_worker] collected signals for '%s'", keyword)
-        return {"keyword": keyword, **result}
+        skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        for kw in stale:
+            # Lock the keyword for 24h before spawning to prevent re-triggering
+            self._storage.update_keyword_collected_at(kw)
+            try:
+                subprocess.Popen(
+                    [sys.executable, "-m", "skill", "collect_keyword",
+                     _json.dumps({"keyword": kw})],
+                    cwd=skill_dir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                log.info("[llm_worker] spawned collect subprocess for '%s'", kw)
+            except Exception as e:
+                log.error("[llm_worker] failed to spawn collect for '%s': %s", kw, e)
 
     def _handle_process_batch(self) -> dict[str, Any]:
         """
