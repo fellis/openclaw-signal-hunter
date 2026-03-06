@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 
 DATABASE_URL   = os.environ.get("DATABASE_URL", "postgresql://signal:signal@postgres:5432/signal_hunter")
 TRANSLATOR_URL = os.environ.get("TRANSLATOR_URL", "http://10.10.10.4:6340")
+TRANSLATOR_API_KEY = os.environ.get("TRANSLATOR_API_KEY", "")
 TARGET_LANG    = os.environ.get("TARGET_LANG", "ru")
 BATCH_SIZE     = int(os.environ.get("BATCH_SIZE", "32"))
 POLL_INTERVAL  = int(os.environ.get("POLL_INTERVAL", "30"))
@@ -77,9 +78,13 @@ def _translate_batch(texts: list[str]) -> list[str]:
         return texts[:]
 
     indices, payloads = zip(*non_empty)
+    headers = {}
+    if TRANSLATOR_API_KEY:
+        headers["Authorization"] = f"Bearer {TRANSLATOR_API_KEY}"
     resp = httpx.post(
         f"{TRANSLATOR_URL}/translate",
         json={"texts": list(payloads), "target_lang": TARGET_LANG},
+        headers=headers,
         timeout=120.0,
     )
     resp.raise_for_status()
