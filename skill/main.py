@@ -418,6 +418,7 @@ def cmd_set_routing(json_str: str) -> None:
 
 _SH_EMBED_CRON_JOB_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 _SH_WORKER_CRON_JOB_ID = "e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b"
+_SH_EMBED_WORKER_CRON_JOB_ID = "f2e3d4c5-b6a7-8901-bcde-f23456789012"
 
 
 # ------------------------------------------------------------------
@@ -639,6 +640,29 @@ def cmd_set_worker_interval(json_str: str) -> None:
             f"Report: what was processed, or say queue is idle/busy.' "
             f"and patch.schedule. "
             f"Recommended: {{\"kind\": \"cron\", \"expr\": \"* * * * *\"}} (every minute)."
+        ),
+    })
+
+
+def cmd_set_embed_worker_interval(json_str: str = "{}") -> None:
+    """
+    Return the cron_job_id for the embed worker cron so it can be created/updated.
+    json_str: '{}' (no config needed - embed worker has no configurable interval)
+
+    The embed worker runs independently from the LLM worker.
+    Recommended interval: every minute (* * * * *).
+    """
+    _out({
+        "status": "ok",
+        "cron_job_id": _SH_EMBED_WORKER_CRON_JOB_ID,
+        "note": (
+            "To create or update the embed worker cron job, call cron.update with "
+            f"jobId='{_SH_EMBED_WORKER_CRON_JOB_ID}', "
+            "name='Signal Hunter - Embed Worker', "
+            "message='Run sh_embed_worker to classify pending signals. "
+            "Report: classified count, remaining.' "
+            "and patch.schedule. "
+            "Recommended: {\"kind\": \"cron\", \"expr\": \"* * * * *\"} (every minute)."
         ),
     })
 
@@ -970,6 +994,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_routing":              (cmd_set_routing, True),
     "run_worker":               (cmd_run_worker, False),
     "run_embed_worker":         (cmd_run_embed_worker, False),
+    "set_embed_worker_interval": (cmd_set_embed_worker_interval, False),
     "queue_resolve":            (cmd_queue_resolve, True),
     "queue_status":             (cmd_queue_status, False),
     "set_worker_interval":      (cmd_set_worker_interval, True),

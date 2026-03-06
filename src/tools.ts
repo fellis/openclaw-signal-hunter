@@ -663,7 +663,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       name: 'signal_hunter_set_worker_interval',
       description:
         'Configure the LLM worker cron interval and get the cron_job_id to set the schedule. ' +
-        'The worker processes one LLM task per tick (resolve or process_batch). ' +
+        'The LLM worker handles resolve and summarize_batch tasks (no embedding classification). ' +
         'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and schedule. ' +
         'Default: every minute (* * * * *). OpenClaw minimum granularity is 1 minute. ' +
         'Triggers: "настрой воркер", "измени частоту LLM воркера", ' +
@@ -687,6 +687,30 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         const d = result.data as Record<string, unknown>;
         return text(
           `**Worker interval configured:** ${d?.interval_seconds}s\n\n` +
+          `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
+          `${d?.note ?? ''}`
+        );
+      },
+    },
+
+    // ----------------------------------------------------------------
+    // Embed Worker - set cron schedule
+    // ----------------------------------------------------------------
+    {
+      name: 'signal_hunter_set_embed_worker_interval',
+      description:
+        'Get the cron_job_id for the embed worker to create or update its cron schedule. ' +
+        'The embed worker classifies signals via embeddings (no LLM) every minute. ' +
+        'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and schedule. ' +
+        'Triggers: "настрой embed воркер", "создай крон для embed воркера", ' +
+        '"set embed worker schedule", "configure classification cron".',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const result = await runSkillCommand(cfg, 'set_embed_worker_interval');
+        if (!result.success) return text(`Set embed worker interval failed: ${result.error}`);
+        const d = result.data as Record<string, unknown>;
+        return text(
+          `**Embed Worker cron:**\n\n` +
           `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
           `${d?.note ?? ''}`
         );
