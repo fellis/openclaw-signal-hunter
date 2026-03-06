@@ -309,38 +309,49 @@ class EmbedProcessor:
         """
         Ask LLM to summarize N texts in one call.
         Returns list of summary strings in the same order.
+        Falls back to None entries if parsing fails.
         """
         items = "\n\n".join(
-            f"[{i}]\n{t[:800]}" for i, t in enumerate(texts)
+            f"[{i}]\n{t[:600]}" for i, t in enumerate(texts)
         )
         prompt = (
             f"Write a 1-2 sentence summary in English for each of the following {len(texts)} texts. "
             f"Return a JSON array of strings in the same order, e.g. [\"summary0\", \"summary1\"].\n\n"
             f"{items}\n\nReturn ONLY the JSON array."
         )
+        # ~150 output tokens per summary, minimum 512
+        max_tokens = max(512, len(texts) * 150)
         call = LLMCall(
             operation="process",
             messages=[
                 {"role": "system", "content": _SUMMARY_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=len(texts) * 80,
+            max_tokens=max_tokens,
             temperature=0.0,
         )
         raw = self._router.complete(call).strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        summaries = json.loads(raw)
-        if len(summaries) != len(texts):
-            log.warning(
-                "[embed_processor] summary count mismatch: expected %d got %d",
-                len(texts), len(summaries),
-            )
-            # Pad or trim to match
-            while len(summaries) < len(texts):
-                summaries.append(None)
-            summaries = summaries[: len(texts)]
-        return summaries
+
+        try:
+            summaries = json.loads(raw)
+        except json.JSONDecodeError:
+            # Try to recover partial JSON array by closing it
+            try:
+                recovered = raw.rstrip(", \n") + '"]'
+                summaries = json.loads(recovered)
+            except json.JSONDecodeError:
+                log.warning("[embed_processor] could not parse summary response, using None for batch")
+                return [None] * len(texts)
+
+        if not isinstance(summaries, list):
+            return [None] * len(texts)
+
+        # Pad or trim to match expected count
+        while len(summaries) < len(texts):
+            summaries.append(None)
+        return summaries[: len(texts)]
 
     # ------------------------------------------------------------------
     # Private: build ProcessedSignal
