@@ -453,6 +453,11 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
               <SortHeader label="Rank Score (Σ)" col="rank_score" {...colProps} />
             </th>
             <th className="text-left pr-4 py-2.5" style={thStyle}>
+              <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
+                Intensity
+              </span>
+            </th>
+            <th className="text-left pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Confidence" col="avg_confidence" {...colProps} />
             </th>
             <th className="text-left pr-4 py-2.5" style={thStyle}>
