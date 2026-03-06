@@ -36,6 +36,12 @@ _MAX_AGE_DAYS = 90
 _PAGE_SIZE = 100
 _RATE_LIMIT_PAUSE = 1.0
 
+# GitHub labels that indicate noise: test issues, duplicates, spam, etc.
+_NOISE_LABELS = frozenset({
+    "invalid", "spam", "duplicate", "wontfix", "won't fix",
+    "not a bug", "not a question", "off-topic", "stale",
+})
+
 
 @register
 class GitHubCollector(BaseCollector):
@@ -168,6 +174,7 @@ class GitHubCollector(BaseCollector):
                     target.params["full_name"],
                     since=since,
                     limit=plan.max_results_per_target,
+                    keyword=target.query,
                 )
             elif target.scope == "global_search":
                 signals, new_cursor = self._collect_global_search(
@@ -255,10 +262,12 @@ class GitHubCollector(BaseCollector):
         full_name: str,
         since: datetime | None,
         limit: int,
+        keyword: str = "",
     ) -> tuple[list[RawSignal], CursorState]:
         """
         Fetch issues from /repos/{owner}/{repo}/issues.
-        Filters out pull requests (GitHub includes them in issues endpoint).
+        Filters out pull requests, noise labels, empty content, and
+        issues where the keyword does not appear in title or body.
         """
         url = f"{_GITHUB_API}/repos/{full_name}/issues"
         params: dict = {
@@ -300,7 +309,7 @@ class GitHubCollector(BaseCollector):
                 if newest_updated_at is None:
                     newest_updated_at = updated_at
 
-                signal = self._issue_to_signal(item)
+                signal = self._issue_to_signal(item, keyword=keyword)
                 if signal:
                     signals.append(signal)
 
@@ -367,9 +376,40 @@ class GitHubCollector(BaseCollector):
 
         return signals, self._make_cursor(query, newest)
 
-    def _issue_to_signal(self, item: dict) -> RawSignal | None:
-        """Convert a GitHub issue JSON dict to a RawSignal."""
+    def _issue_to_signal(self, item: dict, keyword: str = "") -> RawSignal | None:
+        """
+        Convert a GitHub issue JSON dict to a RawSignal.
+
+        Returns None (skip) when any of the following is true:
+        - Issue has a noise label (invalid, spam, duplicate, wontfix, stale, ...)
+        - Body is empty AND reactions == 0 AND comments <= 1
+        - A keyword is given and it does not appear in title or body (case-insensitive)
+        """
         try:
+            # Filter 1: noise labels
+            labels = [lb["name"].lower() for lb in item.get("labels", [])]
+            if any(lb in _NOISE_LABELS for lb in labels):
+                log.debug("[github] skip noise label: %s", labels)
+                return None
+
+            title = item.get("title", "")
+            body = item.get("body") or ""
+            reactions = item.get("reactions", {}).get("total_count", 0)
+            comments = item.get("comments", 0)
+
+            # Filter 2: empty / low-signal content
+            if not body.strip() and reactions == 0 and comments <= 1:
+                log.debug("[github] skip empty low-signal issue: %s", title)
+                return None
+
+            # Filter 3: keyword relevance - keyword must appear in title or body
+            if keyword:
+                kw_lower = keyword.lower()
+                text = (title + " " + body).lower()
+                if kw_lower not in text:
+                    log.debug("[github] skip keyword mismatch '%s': %s", keyword, title[:60])
+                    return None
+
             issue_id = item["number"]
             repo_url = item.get("repository_url", "")
             repo_name = repo_url.replace(f"{_GITHUB_API}/repos/", "")
@@ -377,15 +417,15 @@ class GitHubCollector(BaseCollector):
                 source="github_issue",
                 source_id=f"{repo_name}#{issue_id}",
                 url=item.get("html_url", ""),
-                title=item.get("title", ""),
-                body=item.get("body") or "",
+                title=title,
+                body=body,
                 author=item.get("user", {}).get("login", ""),
                 created_at=self._parse_dt(item.get("created_at")) or datetime.now(timezone.utc),
                 collected_at=datetime.now(timezone.utc),
-                score=item.get("reactions", {}).get("total_count", 0),
-                comments_count=item.get("comments", 0),
+                score=reactions,
+                comments_count=comments,
                 tags=[lb["name"] for lb in item.get("labels", [])],
-                extra={"repo": repo_name, "state": item.get("state")},
+                extra={"repo": repo_name, "state": item.get("state"), "keywords": [keyword] if keyword else []},
             )
         except Exception as e:
             log.debug("[github] failed to parse issue: %s", e)
