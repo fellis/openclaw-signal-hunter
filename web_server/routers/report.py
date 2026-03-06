@@ -156,6 +156,7 @@ def _aggregate_signals(rows: list[dict], category_filter: list[str]) -> dict[str
         result[rule] = {
             "name": rule,
             "count": n,
+            "rank_score": round(sum(s["rank_score"] for s in signals), 3),
             "avg_rank_score": round(sum(s["rank_score"] for s in signals) / n, 3),
             "avg_intensity": round(sum(s["intensity"] for s in signals) / n, 2),
             "avg_confidence": round(sum(s["confidence"] for s in signals) / n, 3),
@@ -186,7 +187,7 @@ async def get_report(
     confidence_min: float | None = Query(None, ge=0.0, le=1.0),
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
     languages: list[str] = Query(default=[]),
-    sort_by: str = Query("avg_rank_score"),
+    sort_by: str = Query("rank_score"),
     sort_dir: str = Query("desc"),
 ):
     """Return level-1 category aggregates (no clustering)."""
@@ -307,6 +308,7 @@ async def get_clusters(
             "id": cid,
             "name": cluster_names.get(cid, f"Cluster {cid + 1}"),
             "count": n,
+            "rank_score": round(sum(rank_scores), 3),
             "avg_rank_score": round(sum(rank_scores) / max(len(rank_scores), 1), 3),
             "avg_intensity": round(sum(intensities) / max(len(intensities), 1), 2),
             "avg_confidence": round(sum(confidences) / max(len(confidences), 1), 3),
@@ -317,8 +319,8 @@ async def get_clusters(
             "signal_ids": sids,
         })
 
-    # Sort clusters by avg_rank_score desc
-    result_clusters.sort(key=lambda c: c["avg_rank_score"], reverse=True)
+    # Sort clusters by rank_score (sum) desc
+    result_clusters.sort(key=lambda c: c["rank_score"], reverse=True)
     result = {"clusters": result_clusters}
     cache.set("clusters", cache_key, value=result, ttl=1800)
     return result

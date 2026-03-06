@@ -1,7 +1,8 @@
 export interface Category {
   name: string
   count: number
-  avg_rank_score: number
+  rank_score: number      // sum of all signal rank_scores (primary sort key)
+  avg_rank_score: number  // average per signal (shown in bar)
   avg_intensity: number
   avg_confidence: number
   avg_score: number
@@ -15,7 +16,8 @@ export interface Cluster {
   id: number
   name: string
   count: number
-  avg_rank_score: number
+  rank_score: number      // sum of all signal rank_scores
+  avg_rank_score: number  // average per signal (shown in bar)
   avg_intensity: number
   avg_confidence: number
   avg_score: number

@@ -8,16 +8,21 @@ import type { Category, Cluster, Signal, Filters } from '@/types'
 // Helpers
 // ---------------------------------------------------------------------------
 
-function RankBar({ value }: { value: number }) {
-  const pct = Math.min(100, Math.max(0, value * 100))
+function RankBar({ avg, total }: { avg: number; total: number }) {
+  const pct = Math.min(100, Math.max(0, avg * 100))
   return (
     <div className="flex items-center gap-1.5">
       <div className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-3)' }}>
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'var(--accent)' }} />
       </div>
-      <span className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-        {value.toFixed(2)}
-      </span>
+      <div className="flex flex-col leading-none">
+        <span className="text-2xs tabular-nums font-medium" style={{ color: 'var(--text-2)' }}>
+          {total.toFixed(1)}
+        </span>
+        <span className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+          avg {avg.toFixed(2)}
+        </span>
+      </div>
     </div>
   )
 }
@@ -61,7 +66,7 @@ function CategoryBadge({ name }: { name: string }) {
 // Column header
 // ---------------------------------------------------------------------------
 
-type SortKey = 'avg_rank_score' | 'avg_intensity' | 'avg_confidence' | 'count' | 'last_signal_at'
+type SortKey = 'rank_score' | 'avg_rank_score' | 'avg_intensity' | 'avg_confidence' | 'count' | 'last_signal_at'
 type SortKeyL3 = 'rank_score' | 'intensity' | 'confidence' | 'score' | 'comments_count' | 'created_at'
 
 function SortHeader({
@@ -128,9 +133,9 @@ function SignalRow({ signal }: { signal: Signal }) {
           {SOURCE_LABELS[signal.source] ?? signal.source}
         </span>
       </td>
-      <td className="pr-4 py-2.5">
-        <RankBar value={signal.rank_score} />
-      </td>
+        <td className="pr-4 py-2.5">
+          <RankBar avg={signal.rank_score} total={signal.rank_score} />
+        </td>
       <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
         {intensityLabel(signal.intensity)}
       </td>
@@ -209,7 +214,7 @@ function ClusterRow({
           <SourcePills breakdown={cluster.sources_breakdown} />
         </td>
         <td className="pr-4 py-2.5">
-          <RankBar value={cluster.avg_rank_score} />
+          <RankBar avg={cluster.avg_rank_score} total={cluster.rank_score} />
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
           {intensityLabel(cluster.avg_intensity)}
@@ -303,7 +308,7 @@ function CategoryRow({
           <SourcePills breakdown={category.sources_breakdown} />
         </td>
         <td className="pr-4 py-2.5">
-          <RankBar value={category.avg_rank_score} />
+          <RankBar avg={category.avg_rank_score} total={category.rank_score} />
         </td>
         <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
           {intensityLabel(category.avg_intensity)}
@@ -345,7 +350,7 @@ interface TableProps {
 }
 
 export default function SignalTable({ categories, filters }: TableProps) {
-  const [sortBy, setSortBy] = useState<SortKey>('avg_rank_score')
+  const [sortBy, setSortBy] = useState<SortKey>('rank_score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const handleSort = (col: string) => {
@@ -378,7 +383,7 @@ export default function SignalTable({ categories, filters }: TableProps) {
               </span>
             </th>
             <th className="text-left pr-4 py-2.5">
-              <SortHeader label="Rank Score" col="avg_rank_score" {...colProps} />
+              <SortHeader label="Rank Score (Σ / avg)" col="rank_score" {...colProps} />
             </th>
             <th className="text-left pr-4 py-2.5">
               <SortHeader label="Intensity" col="avg_intensity" {...colProps} />
