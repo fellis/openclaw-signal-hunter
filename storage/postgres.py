@@ -487,62 +487,6 @@ class PostgresStorage:
                     (canonical_name, collector_name, json.dumps(dataclasses.asdict(plan))),
                 )
 
-    def add_plan_targets(
-        self,
-        canonical_name: str,
-        collector_name: str,
-        new_targets: list[Any],
-    ) -> int:
-        """
-        Merge new SearchTargets into existing plan without duplicates.
-        Deduplicates by (query, scope) pair.
-        Returns count of actually added targets.
-        """
-        import dataclasses  # noqa: PLC0415
-
-        if not new_targets:
-            return 0
-
-        with self._conn() as conn:
-            with self._cursor(conn) as cur:
-                cur.execute(
-                    """
-                    SELECT plan_data FROM keyword_collection_plans
-                    WHERE canonical_name = %s AND collector_name = %s
-                    FOR UPDATE
-                    """,
-                    (canonical_name, collector_name),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return 0
-
-                plan_data: dict = row["plan_data"]
-                existing = plan_data.get("targets", [])
-                existing_keys = {(t["query"], t["scope"]) for t in existing}
-
-                added = 0
-                for target in new_targets:
-                    d = dataclasses.asdict(target)
-                    key = (d["query"], d["scope"])
-                    if key not in existing_keys:
-                        existing.append(d)
-                        existing_keys.add(key)
-                        added += 1
-
-                if added > 0:
-                    plan_data["targets"] = existing
-                    cur.execute(
-                        """
-                        UPDATE keyword_collection_plans
-                        SET plan_data = %s, updated_at = now()
-                        WHERE canonical_name = %s AND collector_name = %s
-                        """,
-                        (json.dumps(plan_data), canonical_name, collector_name),
-                    )
-
-                return added
-
     def get_collection_plans(self, canonical_name: str) -> dict[str, Any]:
         """Return {collector_name: plan_data} for a keyword."""
         with self._conn() as conn:

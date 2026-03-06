@@ -98,48 +98,6 @@ class GitHubCollector(BaseCollector):
 
         return SearchPlan(targets=targets, max_results_per_target=200)
 
-    def discover_new_sources(
-        self,
-        profile: KeywordProfile,
-        existing_plan: SearchPlan,
-    ) -> list[SearchTarget]:
-        """
-        Search GitHub for repos not yet in the existing plan.
-        Uses canonical_name + aliases from the enriched profile.
-        Returns new repo_issues targets only; global_search targets are ignored
-        since they already capture all repos dynamically.
-        """
-        existing_full_names = {
-            t.params.get("full_name", "")
-            for t in existing_plan.targets
-            if t.scope == "repo_issues"
-        }
-
-        queries = [profile.canonical_name] + profile.aliases[:3]
-        found: dict[str, dict] = {}
-
-        for q in queries:
-            for repo in self._search_repos(q, limit=30):
-                fn = repo.get("full_name", "")
-                if fn and fn not in existing_full_names and fn not in found:
-                    found[fn] = repo
-
-        new_targets = [
-            SearchTarget(
-                query=fn,
-                scope="repo_issues",
-                params={"full_name": fn},
-            )
-            for fn in found
-        ]
-
-        if new_targets:
-            log.info(
-                "[github] discover_new_sources: %d new repo(s) for '%s'",
-                len(new_targets), profile.canonical_name,
-            )
-        return new_targets
-
     def collect(
         self,
         plan: SearchPlan,

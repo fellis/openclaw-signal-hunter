@@ -89,21 +89,6 @@ class BaseCollector(ABC):
         Returns collected signals + updated cursors.
         """
 
-    def discover_new_sources(
-        self,
-        profile: "KeywordProfile",
-        existing_plan: "SearchPlan",
-    ) -> "list[SearchTarget]":
-        """
-        Return new SearchTargets not already present in existing_plan.
-        Called once per collect cycle to expand the plan with newly appeared sources.
-
-        Default implementation returns [] - suitable for query-based collectors
-        (HN, Reddit, SO) that do not track fixed source lists.
-        Override in collectors that monitor specific resources (GitHub repos, HF spaces).
-        """
-        return []
-
     @abstractmethod
     def check_readiness(self) -> "SourceStatus":
         """

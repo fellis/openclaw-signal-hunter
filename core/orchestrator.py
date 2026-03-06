@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from core.embedder import Embedder
-from core.models import ExtractionRule, KeywordProfile, SearchPlan, SearchTarget
+from core.models import ExtractionRule, SearchPlan, SearchTarget
 from core.processor import Processor
 from core.registry import BaseCollector, get, get_all, load_all_collectors
 from storage.postgres import PostgresStorage
@@ -82,26 +82,6 @@ class Orchestrator:
 
             try:
                 plan = self._deserialize_plan(plan_data)
-
-                # Expand plan with newly appeared sources (GitHub repos, HF spaces)
-                profile_data = self._storage.get_keyword_profile(canonical_name)
-                if profile_data:
-                    profile = self._deserialize_profile(profile_data)
-                    new_targets = collector.discover_new_sources(profile, plan)
-                    if new_targets:
-                        added = self._storage.add_plan_targets(
-                            canonical_name, collector_name, new_targets
-                        )
-                        if added:
-                            # Reload plan so the new targets are collected right away
-                            refreshed = self._storage.get_collection_plans(canonical_name)
-                            if collector_name in refreshed:
-                                plan = self._deserialize_plan(refreshed[collector_name])
-                            log.info(
-                                "[orchestrator] expanded plan for %s/%s: +%d target(s)",
-                                canonical_name, collector_name, added,
-                            )
-
                 _emit({
                     "status": "running", "phase": "collect",
                     "keyword": canonical_name, "source": collector_name,
@@ -276,22 +256,6 @@ Provide a structured answer. Include the URL for every claim."""
             )
             for r in raw_rules
         ]
-
-    @staticmethod
-    @staticmethod
-    def _deserialize_profile(profile_data: dict[str, Any]) -> KeywordProfile:
-        """Reconstruct KeywordProfile from stored JSON (no discovered resources needed)."""
-        return KeywordProfile(
-            raw=profile_data.get("raw", ""),
-            canonical_name=profile_data.get("canonical_name", ""),
-            keyword_type=profile_data.get("keyword_type", "topic"),
-            description=profile_data.get("description", ""),
-            aliases=profile_data.get("aliases", []),
-            related_terms=profile_data.get("related_terms", []),
-            pain_patterns=profile_data.get("pain_patterns", []),
-            search_queries=profile_data.get("search_queries", {}),
-            relevant_subreddits=profile_data.get("relevant_subreddits", []),
-        )
 
     @staticmethod
     def _deserialize_plan(plan_data: dict[str, Any]) -> SearchPlan:
