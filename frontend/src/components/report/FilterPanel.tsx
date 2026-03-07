@@ -25,7 +25,7 @@ interface Props {
 }
 
 function MultiSelect({
-  label, options, selected, onChange, labelMap, counts,
+  label, options, selected, onChange, labelMap, counts, keepOrder,
 }: {
   label: string
   options: string[]
@@ -33,13 +33,14 @@ function MultiSelect({
   onChange: (v: string[]) => void
   labelMap?: Record<string, string>
   counts?: Record<string, number>
+  keepOrder?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const toggle = (v: string) =>
     onChange(selected.includes(v) ? selected.filter(s => s !== v) : [...selected, v])
 
-  // Sort options: selected first, then by count desc, then alpha
-  const sorted = [...options].sort((a, b) => {
+  // Sort: selected first, then by count desc, then alpha. keepOrder skips sort.
+  const sorted = keepOrder ? options : [...options].sort((a, b) => {
     const aSelected = selected.includes(a)
     const bSelected = selected.includes(b)
     if (aSelected !== bSelected) return aSelected ? -1 : 1
@@ -283,6 +284,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         onChange={v => onChange({ intensities: v.map(Number) })}
         labelMap={INTENSITY_LABELS}
         counts={counts.intensities}
+        keepOrder
       />
       <RangeFilter
         label="Confidence"
