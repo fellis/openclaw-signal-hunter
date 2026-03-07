@@ -14,7 +14,7 @@ Embedding classification (no LLM) runs via a SEPARATE embed worker cron
 Worker guarantees:
   - Only one LLM task runs at a time (has_running_llm_task check)
   - Retries failed tasks up to 3 times before marking as 'failed'
-  - Resets tasks stuck in 'running' for > 10 minutes
+  - Resets tasks stuck in 'running' for > 2 minutes (budget is 50s, so 2 min = safe margin)
   - Loops within one cron tick until time budget is exhausted
 """
 
@@ -29,7 +29,7 @@ from storage.postgres import PostgresStorage
 
 log = logging.getLogger(__name__)
 
-_MAX_STUCK_MINUTES = 10
+_MAX_STUCK_MINUTES = 2
 _DEFAULT_BUDGET_SECONDS = 50
 
 _LLM_SYSTEM_V6 = (
