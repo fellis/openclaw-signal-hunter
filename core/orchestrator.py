@@ -353,10 +353,18 @@ Provide a structured answer. Include the URL for every claim."""
             return {"total": 0}
 
         raw_ids = [str(r["raw_signal_id"]) for r in rows]
+        dedup_keys = [r["dedup_key"] for r in rows]
         _emit({
             "status": "running", "phase": "reprocess",
             "keyword": keyword, "deleting": len(raw_ids),
         })
+
+        # Clear pending/running borderline_relevance tasks so LLM Worker does not update deleted rows
+        cancelled = self._storage.delete_llm_tasks_by_dedup_keys(
+            "borderline_relevance", dedup_keys
+        )
+        if cancelled:
+            _emit({"status": "running", "phase": "reprocess", "cancelled_llm_tasks": cancelled})
 
         # Remove from Qdrant first
         vector = VectorStorage()
@@ -373,10 +381,9 @@ Provide a structured answer. Include the URL for every claim."""
         deleted = self._storage.delete_processed_signals(raw_ids)
         _emit({"status": "running", "phase": "reprocess", "deleted": deleted})
 
-        # Re-classify
-        total = self.process(router)
-        _emit({"status": "done", "phase": "reprocess", "deleted": deleted, "reprocessed": total.get("total", 0)})
-        return {"deleted": deleted, "reprocessed": total.get("total", 0)}
+        # Embed Worker will pick up these raw signals on next cron tick and re-classify (with hybrid)
+        _emit({"status": "done", "phase": "reprocess", "deleted": deleted})
+        return {"deleted": deleted}
 
     def generate_change_report(self, keyword: str, router) -> str:
         """

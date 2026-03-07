@@ -160,7 +160,6 @@ def _fetch_signals(where: str, params: list) -> list[dict]:
         JOIN raw_signals r ON r.id = p.raw_signal_id
         WHERE {where}
         ORDER BY p.rank_score DESC NULLS LAST
-        LIMIT 20000
         """,
         params,
     )

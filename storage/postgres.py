@@ -692,6 +692,31 @@ class PostgresStorage:
             with self._cursor(conn) as cur:
                 cur.execute("DELETE FROM llm_task_queue WHERE id = %s", (task_id,))
 
+    def delete_llm_tasks_by_dedup_keys(
+        self, task_type: str, dedup_keys: list[str], statuses: list[str] | None = None
+    ) -> int:
+        """
+        Delete llm_task_queue tasks of given type whose payload->>'dedup_key' is in dedup_keys.
+        Used by reprocess to clear pending/running borderline_relevance before deleting processed_signals.
+        statuses: default ('pending', 'running') - only cancel those, not completed/failed.
+        Returns count deleted.
+        """
+        if not dedup_keys:
+            return 0
+        statuses = statuses or ["pending", "running"]
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    DELETE FROM llm_task_queue
+                    WHERE task_type = %s
+                      AND status = ANY(%s)
+                      AND payload->>'dedup_key' = ANY(%s)
+                    """,
+                    (task_type, statuses, dedup_keys),
+                )
+                return cur.rowcount
+
     def fail_llm_task(self, task_id: str, error: str) -> None:
         """
         Increment retry_count. After 3 failures mark as 'failed' (permanent).
