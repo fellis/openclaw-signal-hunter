@@ -485,6 +485,13 @@ def cmd_run_embed_worker(json_str: str = "{}") -> None:
     from core.embed_worker import EmbedWorker  # noqa: PLC0415
 
     config = _load_config()
+
+    # Pause guard: set config.workers_paused = true to halt all workers
+    # during reclassification rule updates or maintenance.
+    if config.get("workers_paused", False):
+        _out({"status": "paused", "note": "Embed worker paused (workers_paused=true in config)."})
+        return
+
     storage = _make_storage()
     worker = EmbedWorker(config, storage)
     result = worker.run()
