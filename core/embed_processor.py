@@ -99,6 +99,12 @@ class EmbedProcessor:
             rule.name: float(per_rule_cfg.get(rule.name, base))
             for rule in rules
         }
+        # Negative anchor penalty parameters.
+        # adjusted_sim = pos_sim - neg_weight * max(0, neg_sim - neg_min_sim)
+        # neg_min_sim is the floor: penalty only kicks in above this similarity,
+        # so incidental background similarity (~0.35) never hurts genuine signals.
+        self._neg_weight = float(proc_cfg.get("neg_weight", 0.5))
+        self._neg_min_sim = float(proc_cfg.get("neg_min_sim", 0.45))
         self._embed_batch_size = int(proc_cfg.get("embed_batch_size", 32))
         self._db_fetch_size = int(proc_cfg.get("batch_size", 50))
         self._max_body_chars = int(proc_cfg.get("max_body_chars", 1000))
@@ -106,9 +112,9 @@ class EmbedProcessor:
         embedder_cfg = config.get("embedder", {})
         self._service_url = (embedder_cfg.get("service_url") or "http://localhost:6335").rstrip("/")
 
-        # Pre-compute rule vectors once - shape: list of (N_anchors, D) per rule
+        # Pre-compute rule vectors once at init
         log.info("[embed_processor] pre-computing rule vectors (%d rules)", len(rules))
-        self._rule_vectors: list[np.ndarray] = self._embed_rules(rules)
+        self._rule_vectors, self._rule_neg_vectors = self._embed_rules(rules)
         log.info("[embed_processor] rule vectors ready")
 
     # ------------------------------------------------------------------
@@ -212,29 +218,54 @@ class EmbedProcessor:
     # Private: embedding
     # ------------------------------------------------------------------
 
-    def _embed_rules(self, rules: list[ExtractionRule]) -> list[np.ndarray]:
+    def _embed_rules(
+        self,
+        rules: list[ExtractionRule],
+    ) -> tuple[list[np.ndarray], list[np.ndarray | None]]:
         """
-        Embed each rule as a set of anchor vectors: description + each example phrase.
-        Returns list of (N_anchors, D) arrays - one per rule.
+        Embed each rule as positive anchor vectors (description + examples)
+        and negative anchor vectors (negative_examples).
+
+        Returns:
+            pos_vectors: list of (N_pos, D) arrays, one per rule.
+            neg_vectors: list of (N_neg, D) arrays or None if rule has no negatives.
         """
-        rule_anchor_lists: list[list[str]] = []
+        pos_lists: list[list[str]] = []
+        neg_lists: list[list[str]] = []
         for rule in rules:
-            anchors = [f"{rule.name}: {rule.description}"]
-            anchors.extend(rule.examples or [])
-            rule_anchor_lists.append(anchors)
+            pos = [f"{rule.name}: {rule.description}"]
+            pos.extend(rule.examples or [])
+            pos_lists.append(pos)
+            neg_lists.append(rule.negative_examples or [])
 
-        # Flatten all anchors for a single batch call
-        flat_texts = [text for anchors in rule_anchor_lists for text in anchors]
-        flat_vectors = self._embed_texts(flat_texts)  # (total_anchors, D)
+        # Embed positives in one batch call
+        flat_pos = [t for anchors in pos_lists for t in anchors]
+        flat_pos_vecs = self._embed_texts(flat_pos)
 
-        # Re-split per rule
-        result = []
+        pos_result: list[np.ndarray] = []
         offset = 0
-        for anchors in rule_anchor_lists:
+        for anchors in pos_lists:
             n = len(anchors)
-            result.append(flat_vectors[offset : offset + n])
+            pos_result.append(flat_pos_vecs[offset:offset + n])
             offset += n
-        return result
+
+        # Embed negatives only when at least one rule has them
+        neg_result: list[np.ndarray | None] = []
+        flat_neg = [t for anchors in neg_lists for t in anchors]
+        if flat_neg:
+            flat_neg_vecs = self._embed_texts(flat_neg)
+            offset = 0
+            for anchors in neg_lists:
+                n = len(anchors)
+                if n > 0:
+                    neg_result.append(flat_neg_vecs[offset:offset + n])
+                else:
+                    neg_result.append(None)
+                offset += n
+        else:
+            neg_result = [None] * len(rules)
+
+        return pos_result, neg_result
 
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
         """Embed texts via embedder service in batches. Returns (N, D) float32."""
@@ -261,17 +292,29 @@ class EmbedProcessor:
         """
         Compute cosine similarity between each signal and each rule.
         Since all vectors are L2-normalized, sim = dot product.
+
+        For each rule:
+          pos_sim = max similarity to positive anchors (description + examples)
+          neg_sim = max similarity to negative anchors (negative_examples)
+          adjusted_sim = pos_sim - neg_weight * neg_sim
+
         Returns classification dicts for each signal.
         """
-        # signal_vectors: (N, D), already normalized by embedder
         results = []
 
         for sig_vec in signal_vectors:
             rule_sims: list[float] = []
-            for rule_vec_set in self._rule_vectors:
-                # sim against all anchors of this rule, take max
-                sims = rule_vec_set @ sig_vec  # (N_anchors,)
-                rule_sims.append(float(sims.max()))
+            for pos_vecs, neg_vecs in zip(self._rule_vectors, self._rule_neg_vectors):
+                pos_sim = float((pos_vecs @ sig_vec).max())
+                if neg_vecs is not None and self._neg_weight > 0.0:
+                    neg_sim = float((neg_vecs @ sig_vec).max())
+                    # Penalize only when signal is genuinely close to a negative example.
+                    # Background similarity (< neg_min_sim) is ignored to avoid hurting real signals.
+                    penalty = max(0.0, neg_sim - self._neg_min_sim)
+                    adjusted_sim = pos_sim - self._neg_weight * penalty
+                else:
+                    adjusted_sim = pos_sim
+                rule_sims.append(adjusted_sim)
 
             max_sim = max(rule_sims) if rule_sims else 0.0
 

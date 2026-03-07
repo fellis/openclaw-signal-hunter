@@ -11,7 +11,7 @@ You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 1. **Discovers** where the topic is discussed (repos, subreddits, HF models, SO tags) via real API calls - no LLM guessing
 2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested aliases and search queries
 3. **Collects automatically** - every 24h per keyword via a dedicated Collect Worker cron (GitHub, HF, HN, SO, Reddit), expanding the plan with newly appeared repos/spaces on each run
-4. **Classifies** every signal using embedding cosine similarity against your extraction rules - fast local inference, no GPU required for classify. LLM generates a short summary only for relevant signals
+4. **Classifies** every signal using embedding cosine similarity against a universal set of signal-type rules (pain_point, feature_request, bug_report, adoption_signal, comparison, use_case, pricing_concern, positive_feedback, market_observation, security_concern). Supports per-rule thresholds and negative anchor penalty. Fast local inference, no GPU required for classify. LLM generates a short summary only for relevant signals
 5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
 7. **Generates change reports** - weekly/monthly deltas with what's new and what grew
@@ -55,6 +55,9 @@ skill/main.py         ← CLI dispatcher
      ├── core/resolver.py        ← keyword discovery + LLM enrichment
      ├── core/orchestrator.py    ← collect → embed pipeline
      ├── core/embed_processor.py ← embedding-based classify (no LLM, default mode)
+     │                              universal signal-type rules; per-rule thresholds;
+     │                              negative anchor penalty (neg_weight, neg_min_sim);
+     │                              HN noise prefix stripping before embedding
      ├── core/embed_worker.py    ← embed worker: runs EmbedProcessor per cron tick
      ├── core/processor.py       ← LLM classification fallback (mode: "llm")
      ├── core/embedder.py        ← HTTP client → embedder service → Qdrant (Outbox pattern)
@@ -369,45 +372,42 @@ ClawBot: LLM queue: 0 pending, 0 running. Last collect: RAG 2m ago, ollama in pr
 
 ---
 
-### Step 5 - Suggest and approve classification rules
+### Step 5 - Classification rules
+
+Signal Hunter ships with a **universal set of 10 signal-type rules** that work across all keywords and domains without modification. They classify *what kind of signal it is*, not *what topic it is about*:
+
+| Rule | What it captures |
+|---|---|
+| `pain_point` | Frustration, blocker, something broken causing friction |
+| `feature_request` | Explicit request for a new capability or improvement |
+| `bug_report` | Specific reproducible bug with error details or reproduction steps |
+| `adoption_signal` | Evidence of real production usage or team migration |
+| `comparison` | Explicit comparison between tools, frameworks, or approaches |
+| `use_case` | Concrete real-world application of a developer tool or AI/ML technology |
+| `pricing_concern` | Concern about cost, billing, API expense, or economic viability |
+| `positive_feedback` | Strong explicit praise or success story |
+| `market_observation` | Higher-level trend or pattern observed across many teams |
+| `security_concern` | Discovered vulnerability, active exploit, or data exposure risk |
+
+Each rule is defined with:
+- `description` - primary embedding anchor
+- `examples` - additional anchor phrases (each becomes a separate embedding vector; similarity is `max` across all anchors)
+- `negative_examples` - used as penalty anchors: if a signal is too close to a negative example, its adjusted similarity drops
+
+Rules are stored in `config.json` under `extraction_rules`. To tune them via chat:
 
 ```
 You: suggest rules for RAG
 ```
 
-The LLM analyzes actual posts from the database and proposes rules grounded in real content:
-
-```
-ClawBot:
-Suggested extraction_rules for "RAG" (from 1001 real posts):
-
-1. retrieval_failure (priority 5)
-   When retrieval returns irrelevant docs or causes hallucinations
-   Real examples: "RAG keeps returning wrong documents even with good embeddings"
-                  "chunks are too large and context gets diluted"
-
-2. chunking_strategy (priority 4)
-   Questions and pain around document splitting strategies
-
-3. embedding_model_choice (priority 4)
-   Comparisons and selection of embedding models
-
-4. reranking (priority 3)
-   Requests and pain around the reranking step
-
-5. evaluation_difficulty (priority 3)
-   Difficulty evaluating RAG pipeline quality
-
-Approve all?
-```
+The LLM analyzes real posts from the database and can suggest additions or refinements. You approve and save:
 
 ```
 You: approve
+ClawBot: ✓ Rules saved to config.json
 ```
 
-```
-ClawBot: ✓ 5 rules saved to config.json
-```
+In practice the universal rules require no per-keyword customization. All keywords (RAG, ollama, LangChain, etc.) are classified through the same ruleset - the matched rule tells you *what kind of signal it is*, the keywords in `raw_signals` tell you *what it is about*.
 
 ---
 
@@ -482,11 +482,11 @@ Top new issues:
 - Windows CUDA support broken after update (score: 189)
 - Feature request: model quantization API (score: 134)
 
-By category:
+By signal type:
 - bug_report: 21 (+5)
 - feature_request: 14 (+3)
-- performance: 8 (-1)
-- documentation: 4 (+2)
+- pain_point: 8 (-1)
+- adoption_signal: 4 (+2)
 
 **Trend:** Bug reports increased 31% - possible regression in recent release.
 ```
@@ -539,8 +539,11 @@ After the LLM task queue is drained each tick, `TranslateWorker.run()` is called
 
 Embed Worker per tick (no LLM, runs independently):
 - Fetches raw signals with no `processed_signals` row (up to `batch_size * max_batches_per_run`)
+- Strips HN noise prefixes ("Show HN:", "Ask HN:", etc.) from titles before embedding
 - Embeds via local bge-m3 HTTP service
-- Classifies by cosine similarity against rule vectors (is_relevant, matched_rules, confidence, intensity)
+- Builds rule vectors once at init: description + examples = positive anchors; negative_examples = negative anchors
+- Classifies by adjusted cosine similarity: `pos_sim - neg_weight * max(0, neg_sim - neg_min_sim)` per rule
+- Applies per-rule thresholds (`rule_thresholds` in config) for finer precision control
 - Saves with `summary=null` - summary is generated asynchronously by LLM Worker
 
 Collect Worker per tick:
@@ -667,6 +670,13 @@ Key sections:
     "mode": "embed",
     "relevance_threshold": 0.40,
     "rule_threshold": 0.50,
+    "rule_thresholds": {
+      "security_concern": 0.57,
+      "positive_feedback": 0.54,
+      "market_observation": 0.52
+    },
+    "neg_weight": 0.5,
+    "neg_min_sim": 0.50,
     "embed_batch_size": 32,
     "summary_batch_size": 5,
     "summary_fetch_limit": 50,
@@ -711,8 +721,11 @@ Key sections:
 
 **`processor` settings explained:**
 - `mode: "embed"` - use embedding cosine similarity for classify + LLM for summary only. Set to `"llm"` to revert to full LLM classification.
-- `relevance_threshold: 0.40` - minimum cosine similarity to a signal to even consider it. Signal is only marked relevant if it also matches at least one rule (see below).
-- `rule_threshold: 0.50` - minimum similarity to assign a rule to a signal. A signal is `is_relevant=true` only if at least one rule passes this threshold - prevents generic on-topic content without a concrete category from flooding the feed.
+- `relevance_threshold: 0.40` - minimum cosine similarity across all rules to consider a signal at all. Signal is only marked `is_relevant=true` if it also matches at least one rule.
+- `rule_threshold: 0.50` - default minimum adjusted similarity to assign a rule to a signal. A signal is relevant only if at least one rule passes this threshold - prevents generic on-topic content without a concrete category from flooding the feed.
+- `rule_thresholds` - per-rule overrides for `rule_threshold`. Useful to tighten noisy rules without affecting others. Example: `{"security_concern": 0.57}` raises the bar for that rule only.
+- `neg_weight: 0.5` - weight of the negative anchor penalty. For each rule: `adjusted_sim = pos_sim - neg_weight * max(0, neg_sim - neg_min_sim)`. Set to `0.0` to disable.
+- `neg_min_sim: 0.50` - floor for the negative penalty. Only negatives with similarity above this threshold count - prevents background noise from penalizing genuine signals.
 - `embed_batch_size: 32` - signals per embedder HTTP call during classify.
 - `summary_batch_size: 5` - relevant signals per LLM call in summarize_batch worker.
 - `summary_fetch_limit: 50` - signals fetched per summarize_batch worker tick.
