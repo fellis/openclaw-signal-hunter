@@ -74,7 +74,6 @@ interface PipelineStageClassifyProps {
   index: number
   processedTotal: number
   rawTotal: number
-  relevantTotal: number
   classifiedByEmbeddings: number
   classifiedByLlm: number
   unprocessed: number
@@ -85,13 +84,11 @@ function PipelineStageClassify({
   index,
   processedTotal,
   rawTotal,
-  relevantTotal,
   classifiedByEmbeddings,
   classifiedByLlm,
   unprocessed,
   borderlinePending,
 }: PipelineStageClassifyProps) {
-  const pct = rawTotal ? (processedTotal / rawTotal) * 100 : 0
   return (
     <div className="flex flex-col gap-1 min-w-[160px]" style={{ flex: '1 1 160px' }}>
       <div className="flex items-center gap-1.5 mb-0.5">
@@ -113,17 +110,11 @@ function PipelineStageClassify({
       <div className="text-base font-semibold tabular-nums leading-tight" style={{ color: 'var(--text)' }}>
         {processedTotal.toLocaleString()} / {rawTotal.toLocaleString()}
       </div>
-      <div className="text-2xs leading-tight" style={{ color: 'var(--text-muted)' }}>
-        relevant: {relevantTotal.toLocaleString()}
-      </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-2xs" style={{ color: 'var(--text-muted)' }}>
         <div>embeddings: {classifiedByEmbeddings.toLocaleString()}</div>
         <div>LLM: {classifiedByLlm.toLocaleString()}</div>
         <div>queue embeddings: {unprocessed.toLocaleString()}</div>
         <div>queue LLM: {borderlinePending.toLocaleString()}</div>
-      </div>
-      <div className="mt-1 rounded-full overflow-hidden" style={{ height: 3, background: 'var(--border)' }}>
-        <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: 'var(--accent, #6366f1)', borderRadius: 9999 }} />
       </div>
     </div>
   )
@@ -209,7 +200,6 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
             index={3}
             processedTotal={stats.processed_total ?? 0}
             rawTotal={stats.raw_total ?? 0}
-            relevantTotal={stats.relevant_total ?? 0}
             classifiedByEmbeddings={stats.classified_by_embeddings ?? 0}
             classifiedByLlm={stats.classified_by_llm ?? 0}
             unprocessed={stats.unprocessed ?? 0}
