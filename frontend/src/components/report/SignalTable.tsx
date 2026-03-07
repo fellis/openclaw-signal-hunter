@@ -1,8 +1,57 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { ChevronRight, ExternalLink, Loader2 } from 'lucide-react'
 import { cn, formatRelative, SOURCE_LABELS, SOURCE_COLORS, intensityLabel, getCategoryColor, formatCategoryName } from '@/lib/utils'
 import { fetchClusters, fetchSignals } from '@/api/report'
 import type { Category, Cluster, Signal, Filters, Rule } from '@/types'
+
+// ---------------------------------------------------------------------------
+// Tooltip
+// ---------------------------------------------------------------------------
+
+function Tooltip({ text, children, maxW = 360 }: { text: string; children: React.ReactNode; maxW?: number }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const show = (e: React.MouseEvent) => {
+    timerRef.current = setTimeout(() => setPos({ x: e.clientX, y: e.clientY }), 300)
+  }
+  const move = (e: React.MouseEvent) => {
+    if (pos) setPos({ x: e.clientX, y: e.clientY })
+  }
+  const hide = () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setPos(null)
+  }
+
+  return (
+    <span onMouseEnter={show} onMouseMove={move} onMouseLeave={hide} style={{ display: 'contents' }}>
+      {children}
+      {pos && (
+        <div
+          style={{
+            position: 'fixed',
+            left: Math.min(pos.x + 12, window.innerWidth - maxW - 16),
+            top: pos.y + 16,
+            zIndex: 9999,
+            maxWidth: maxW,
+            background: 'var(--bg-2, #1e1e2e)',
+            color: 'var(--text, #cdd6f4)',
+            border: '1px solid var(--border, #313244)',
+            borderRadius: 6,
+            padding: '6px 10px',
+            fontSize: 11,
+            lineHeight: 1.5,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            pointerEvents: 'none',
+            wordBreak: 'break-word',
+          }}
+        >
+          {text}
+        </div>
+      )}
+    </span>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -112,33 +161,36 @@ function SignalRow({ signal, lang = 'en' }: { signal: Signal; lang?: string }) {
       <td className="pr-4 py-2.5" style={{ minWidth: 320 }}>
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
-            <a
-              href={signal.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-medium hover:underline flex items-center gap-1"
-              style={{ color: 'var(--text)', fontSize: 12 }}
-            >
-              <span className="truncate block max-w-xs">{signal.title}</span>
-              <ExternalLink size={10} className="shrink-0 opacity-40" />
-              {showLangBadge && (
-                <span
-                  title={signal.translation_available ? 'Translated' : 'Translation pending'}
-                  className="ml-0.5 inline-flex items-center px-1 py-0 rounded text-2xs font-bold shrink-0"
-                  style={{
-                    background: signal.translation_available ? 'var(--accent)20' : 'var(--bg-3)',
-                    color: signal.translation_available ? 'var(--accent)' : 'var(--text-muted)',
-                    border: `1px solid ${signal.translation_available ? 'var(--accent)' : 'var(--border)'}`,
-                  }}
-                >
-                  {signal.translation_available ? lang.toUpperCase() : '~'}
-                </span>
-              )}
-            </a>
+            <Tooltip text={signal.title_original || signal.title}>
+              <a
+                href={signal.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium hover:underline flex items-center gap-1 min-w-0"
+                style={{ color: 'var(--text)', fontSize: 12 }}
+              >
+                <span className="truncate">{signal.title}</span>
+                <ExternalLink size={10} className="shrink-0 opacity-40" />
+                {showLangBadge && (
+                  <span
+                    className="ml-0.5 inline-flex items-center px-1 py-0 rounded text-2xs font-bold shrink-0"
+                    style={{
+                      background: signal.translation_available ? 'var(--accent)20' : 'var(--bg-3)',
+                      color: signal.translation_available ? 'var(--accent)' : 'var(--text-muted)',
+                      border: `1px solid ${signal.translation_available ? 'var(--accent)' : 'var(--border)'}`,
+                    }}
+                  >
+                    {signal.translation_available ? lang.toUpperCase() : '~'}
+                  </span>
+                )}
+              </a>
+            </Tooltip>
             {signal.summary && (
-              <p className="mt-0.5 text-2xs leading-relaxed line-clamp-2" style={{ color: 'var(--text-muted)' }}>
-                {signal.summary}
-              </p>
+              <Tooltip text={signal.summary_original || signal.summary}>
+                <p className="mt-0.5 text-2xs leading-relaxed line-clamp-2 cursor-default" style={{ color: 'var(--text-muted)' }}>
+                  {signal.summary}
+                </p>
+              </Tooltip>
             )}
             {signal.keywords && signal.keywords.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">
@@ -247,12 +299,14 @@ function ClusterRow({
           />
         </td>
         <td className="pr-4 py-2.5" style={{ minWidth: 320 }}>
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-xs" style={{ color: 'var(--text-2)' }}>
-              {cluster.name}
-            </span>
-            <span className="text-2xs" style={{ color: 'var(--text-muted)' }}>{cluster.count}</span>
-            {loading && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
+          <div className="flex items-center gap-2 min-w-0">
+            <Tooltip text={cluster.name}>
+              <span className="font-medium text-xs truncate" style={{ color: 'var(--text-2)' }}>
+                {cluster.name}
+              </span>
+            </Tooltip>
+            <span className="text-2xs shrink-0" style={{ color: 'var(--text-muted)' }}>{cluster.count}</span>
+            {loading && <Loader2 size={11} className="animate-spin shrink-0" style={{ color: 'var(--text-muted)' }} />}
           </div>
         </td>
         <td className="pr-4 py-2.5">
