@@ -91,6 +91,14 @@ class EmbedProcessor:
         proc_cfg = config.get("processor", {})
         self._relevance_threshold = float(proc_cfg.get("relevance_threshold", self._RELEVANCE_THRESHOLD))
         self._rule_threshold = float(proc_cfg.get("rule_threshold", self._RULE_THRESHOLD))
+        # Per-rule threshold overrides: allows tightening noisy rules without affecting others.
+        # Example config: "rule_thresholds": {"security_concern": 0.56, "positive_feedback": 0.54}
+        base = self._rule_threshold
+        per_rule_cfg = proc_cfg.get("rule_thresholds", {})
+        self._per_rule_thresholds: dict[str, float] = {
+            rule.name: float(per_rule_cfg.get(rule.name, base))
+            for rule in rules
+        }
         self._embed_batch_size = int(proc_cfg.get("embed_batch_size", 32))
         self._db_fetch_size = int(proc_cfg.get("batch_size", 50))
         self._max_body_chars = int(proc_cfg.get("max_body_chars", 1000))
@@ -270,7 +278,7 @@ class EmbedProcessor:
             matched_rule_names = [
                 self._rules[j].name
                 for j, sim in enumerate(rule_sims)
-                if sim >= self._rule_threshold
+                if sim >= self._per_rule_thresholds.get(self._rules[j].name, self._rule_threshold)
             ]
 
             # Signal is relevant only if it passes the threshold AND matches at least one rule.
