@@ -32,6 +32,26 @@ from storage.postgres import PostgresStorage
 
 log = logging.getLogger(__name__)
 
+# HN post title prefixes that carry no signal about content type.
+# Stripping them lets the classifier focus on actual content.
+_HN_NOISE_PREFIXES = (
+    "Show HN:",
+    "Ask HN:",
+    "Tell HN:",
+    "Launch HN:",
+)
+
+
+def _strip_hn_prefix(title: str) -> str:
+    """Remove HN submission prefixes from titles before embedding."""
+    stripped = title.strip()
+    for prefix in _HN_NOISE_PREFIXES:
+        if stripped.lower().startswith(prefix.lower()):
+            stripped = stripped[len(prefix):].strip()
+            break
+    return stripped
+
+
 class EmbedProcessor:
     """
     Classifies raw signals via embedding cosine similarity.
@@ -135,6 +155,9 @@ class EmbedProcessor:
             for s in signals:
                 title = s.get("title") or ""
                 body = s.get("body") or ""
+                # Strip noisy HN prefixes that skew classification toward use_case/positive_feedback
+                # based on format rather than content. The actual content is what matters.
+                title = _strip_hn_prefix(title)
                 if len(body) > self._max_body_chars:
                     body = body[:self._max_body_chars] + "..."
                 s["_text"] = f"{title}\n\n{body}".strip() if title else body
