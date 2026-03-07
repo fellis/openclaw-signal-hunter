@@ -6,7 +6,7 @@ Uses the embedder HTTP service (bge-m3) for fast local inference.
 Two-stage classification pipeline:
   1. Domain pre-filter (when hybrid_relevance.enabled=true):
      - Compute domain score against AI/ML positive/negative anchors.
-     - domain_score >= domain_high -> run rule matching (auto-accept zone)
+     - domain_score >= domain_high -> mark relevant immediately (auto-accept zone, no rule matching)
      - domain_score <= domain_low  -> mark irrelevant immediately (auto-reject zone)
      - between thresholds          -> borderline: enqueue for LLM review
   2. Rule matching (for auto-accept and borderline-relevant after LLM):
