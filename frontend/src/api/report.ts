@@ -70,6 +70,24 @@ export async function fetchRules(): Promise<Rule[]> {
   return data.rules || []
 }
 
+export async function fetchSourceCounts(
+  filters: Partial<Filters>,
+): Promise<Record<string, number>> {
+  const qs = buildQueryString({
+    date_from: filters.date_from || '',
+    date_to: filters.date_to || '',
+    categories: filters.categories || [],
+    keywords: filters.keywords || [],
+    intensities: filters.intensities || [],
+    confidence_min: filters.confidence_min ?? '',
+    confidence_max: filters.confidence_max ?? '',
+  })
+  const res = await fetch(`/api/sources/counts?${qs}`)
+  if (!res.ok) return {}
+  const data = await res.json()
+  return Object.fromEntries((data.counts || []).map((c: { name: string; count: number }) => [c.name, c.count]))
+}
+
 export async function fetchKeywordCounts(
   filters: Partial<Filters>,
 ): Promise<Record<string, number>> {

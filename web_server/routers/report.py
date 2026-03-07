@@ -459,6 +459,60 @@ async def get_keywords():
     return {"keywords": [r["canonical_name"] for r in rows]}
 
 
+@router.get("/sources/counts")
+async def get_source_counts(
+    request: Request,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    categories: list[str] = Query(default=[]),
+    keywords: list[str] = Query(default=[]),
+    intensities: list[int] = Query(default=[]),
+    confidence_min: float | None = Query(None, ge=0.0, le=1.0),
+    confidence_max: float | None = Query(None, ge=0.0, le=1.0),
+):
+    """Return signal counts per source respecting current filters (excluding source filter)."""
+    cache = request.app.state.cache
+    cache_key = dict(
+        date_from=date_from, date_to=date_to, categories=sorted(categories),
+        keywords=sorted(keywords), intensities=sorted(intensities),
+        confidence_min=confidence_min, confidence_max=confidence_max,
+    )
+    cached = cache.get("source_counts", cache_key)
+    if cached is not None:
+        return cached
+
+    where, params = _build_where(
+        date_from, date_to, sources=[], intensities=intensities,
+        confidence_min=confidence_min, confidence_max=confidence_max,
+        keywords=keywords,
+    )
+
+    if categories:
+        where += (
+            " AND EXISTS ("
+            "  SELECT 1 FROM jsonb_array_elements(p.matched_rules) AS mr"
+            "  WHERE mr->>'rule_name' = ANY(%s)"
+            ")"
+        )
+        params = params + [categories]
+
+    rows = fetchall(
+        f"""
+        SELECT r.source, COUNT(*) AS count
+        FROM processed_signals p
+        JOIN raw_signals r ON r.id = p.raw_signal_id
+        WHERE {where}
+        GROUP BY r.source
+        ORDER BY count DESC
+        """,
+        params,
+    )
+
+    result = {"counts": [{"name": r["source"], "count": r["count"]} for r in rows]}
+    cache.set("source_counts", cache_key, value=result, ttl=120)
+    return result
+
+
 @router.get("/keywords/counts")
 async def get_keyword_counts(
     request: Request,

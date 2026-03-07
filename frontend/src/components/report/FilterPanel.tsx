@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Filter, X, ChevronDown } from 'lucide-react'
 import { cn, formatCategoryName, intensityLabel } from '@/lib/utils'
 import type { Filters, Rule } from '@/types'
-import { fetchKeywords, fetchKeywordCounts } from '@/api/report'
+import { fetchKeywords, fetchKeywordCounts, fetchSourceCounts } from '@/api/report'
 
 const SOURCES = [
   'github_issue', 'github_discussion', 'hn_post',
@@ -174,17 +174,19 @@ function RangeFilter({
 export default function FilterPanel({ filters, onChange, rules }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
   const [keywordCounts, setKeywordCounts] = useState<Record<string, number>>({})
+  const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({})
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     fetchKeywords().then(setKeywords)
   }, [])
 
-  // Re-fetch keyword counts when non-keyword filters change (debounced 400ms)
+  // Re-fetch source and keyword counts when relevant filters change (debounced 400ms)
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       fetchKeywordCounts(filters).then(setKeywordCounts)
+      fetchSourceCounts(filters).then(setSourceCounts)
     }, 400)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [
@@ -194,6 +196,8 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
     JSON.stringify(filters.categories),
     JSON.stringify(filters.intensities),
     filters.confidence_min, filters.confidence_max,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(filters.keywords),
   ])
 
   const categoryOptions = rules.map(r => r.name)
@@ -255,6 +259,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         selected={filters.sources}
         onChange={v => onChange({ sources: v })}
         labelMap={SOURCE_LABELS}
+        counts={sourceCounts}
       />
       <MultiSelect
         label="Category"
