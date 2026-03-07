@@ -84,6 +84,11 @@ export interface StatsResponse {
   embedded_total: number
   pending_embeddings: number
   keywords_total: number
+  keywords_run_24h: number
+  new_signals_24h: number
+  borderline_pending: number
+  summarized_total: number
+  summary_pending: number
   avg_rank_score: number
 }
 

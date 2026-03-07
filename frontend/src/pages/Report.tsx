@@ -16,11 +16,56 @@ const DEFAULT_FILTERS: Filters = {
   confidence_max: null,
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
+interface PipelineStageProps {
+  index: number
+  label: string
+  value: string
+  sub: string
+  pct?: number
+  alert?: boolean
+}
+
+function PipelineStage({ index, label, value, sub, pct, alert }: PipelineStageProps) {
+  const barColor = alert ? '#f97316' : 'var(--accent, #6366f1)'
   return (
-    <div className="px-4 py-3 rounded-lg border" style={{ borderColor: 'var(--border)', background: 'var(--bg-2)' }}>
-      <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{label}</div>
-      <div className="text-lg font-semibold tabular-nums" style={{ color: 'var(--text)' }}>{value}</div>
+    <div className="flex flex-col gap-1 min-w-[130px]" style={{ flex: '1 1 130px' }}>
+      <div className="flex items-center gap-1.5 mb-0.5">
+        <span
+          className="text-2xs font-semibold rounded-full flex items-center justify-center shrink-0"
+          style={{
+            width: 18, height: 18,
+            background: 'var(--bg-3, #1e1e2e)',
+            color: 'var(--text-muted)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          {index}
+        </span>
+        <span className="text-2xs uppercase tracking-wider font-medium" style={{ color: 'var(--text-muted)' }}>
+          {label}
+        </span>
+      </div>
+      <div className="text-base font-semibold tabular-nums leading-tight" style={{ color: alert ? '#f97316' : 'var(--text)' }}>
+        {value}
+      </div>
+      <div className="text-2xs leading-tight" style={{ color: 'var(--text-muted)', minHeight: 14 }}>
+        {sub}
+      </div>
+      {pct !== undefined && (
+        <div className="mt-1 rounded-full overflow-hidden" style={{ height: 3, background: 'var(--border)' }}>
+          <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: barColor, borderRadius: 9999 }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PipelineArrow() {
+  return (
+    <div className="flex items-center shrink-0 self-start mt-5" style={{ color: 'var(--text-muted)' }}>
+      <svg width="16" height="10" viewBox="0 0 16 10" fill="none">
+        <path d="M0 5h13M9 1l5 4-5 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
     </div>
   )
 }
@@ -80,15 +125,62 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
         </button>
       </div>
 
-      {/* Stats strip */}
+      {/* Pipeline strip */}
       {stats && (
-        <div className="flex gap-3 px-4 py-3 border-b shrink-0 overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
-          <StatCard label="Total raw" value={stats.raw_total?.toLocaleString() ?? '—'} />
-          <StatCard label="Relevant" value={stats.relevant_total?.toLocaleString() ?? '—'} />
-          <StatCard label="Embedded" value={stats.embedded_total?.toLocaleString() ?? '—'} />
-          <StatCard label="Queue" value={stats.pending_embeddings?.toLocaleString() ?? '—'} />
-          <StatCard label="Keywords" value={stats.keywords_total ?? '—'} />
-          <StatCard label="Avg rank" value={stats.avg_rank_score?.toFixed(3) ?? '—'} />
+        <div
+          className="flex items-start gap-2 px-4 py-3 border-b shrink-0 overflow-x-auto"
+          style={{ borderColor: 'var(--border)', background: 'var(--bg-1, var(--bg))' }}
+        >
+          <PipelineStage
+            index={1}
+            label="Keywords"
+            value={`${stats.keywords_run_24h ?? 0} / ${stats.keywords_total ?? 0}`}
+            sub="обработано за 24ч"
+            pct={stats.keywords_total ? (stats.keywords_run_24h / stats.keywords_total) * 100 : 0}
+          />
+          <PipelineArrow />
+          <PipelineStage
+            index={2}
+            label="Collect"
+            value={`+${stats.new_signals_24h?.toLocaleString() ?? 0}`}
+            sub={`новых за 24ч · всего ${stats.raw_total?.toLocaleString() ?? 0}`}
+          />
+          <PipelineArrow />
+          <PipelineStage
+            index={3}
+            label="Classify"
+            value={`${stats.processed_total?.toLocaleString() ?? 0} / ${stats.raw_total?.toLocaleString() ?? 0}`}
+            sub={`релевантных: ${stats.relevant_total?.toLocaleString() ?? 0}`}
+            pct={stats.raw_total ? (stats.processed_total / stats.raw_total) * 100 : 0}
+          />
+          <PipelineArrow />
+          <PipelineStage
+            index={4}
+            label="LLM"
+            value={stats.borderline_pending?.toLocaleString() ?? '0'}
+            sub="ждут решения"
+            alert={(stats.borderline_pending ?? 0) > 500}
+          />
+          <PipelineArrow />
+          <PipelineStage
+            index={5}
+            label="Summarize"
+            value={`${stats.summarized_total?.toLocaleString() ?? 0} / ${((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)).toLocaleString()}`}
+            sub="с summary"
+            pct={(stats.summarized_total ?? 0) + (stats.summary_pending ?? 0) > 0
+              ? (stats.summarized_total / ((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0))) * 100
+              : 0}
+          />
+          <PipelineArrow />
+          <PipelineStage
+            index={6}
+            label="Vectorize"
+            value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${((stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0)).toLocaleString()}`}
+            sub="в Qdrant"
+            pct={(stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0) > 0
+              ? (stats.embedded_total / ((stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0))) * 100
+              : 0}
+          />
         </div>
       )}
 

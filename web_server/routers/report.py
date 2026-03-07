@@ -594,6 +594,11 @@ async def get_stats(request: Request):
             (SELECT COUNT(*) FROM embedding_queue WHERE status = 'done')::int AS embedded_total,
             (SELECT COUNT(*) FROM embedding_queue WHERE status = 'pending')::int AS pending_embeddings,
             (SELECT COUNT(*) FROM keyword_profiles)::int AS keywords_total,
+            (SELECT COUNT(*) FROM keyword_profiles WHERE last_collected_at >= now() - interval '24 hours')::int AS keywords_run_24h,
+            (SELECT COUNT(*) FROM raw_signals WHERE collected_at >= now() - interval '24 hours')::int AS new_signals_24h,
+            (SELECT COUNT(*) FROM processed_signals WHERE borderline_override_pending = true)::int AS borderline_pending,
+            (SELECT COUNT(*) FROM processed_signals WHERE is_relevant = true AND summary IS NOT NULL)::int AS summarized_total,
+            (SELECT COUNT(*) FROM processed_signals WHERE is_relevant = true AND summary IS NULL)::int AS summary_pending,
             (SELECT AVG(rank_score)::float FROM processed_signals WHERE is_relevant = true) AS avg_rank_score
     """)
 
