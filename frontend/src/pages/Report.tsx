@@ -106,7 +106,7 @@ function PipelineStageClassify({
         </span>
       </div>
       <div className="text-base font-semibold tabular-nums leading-tight" style={{ color: 'var(--text)' }}>
-        {(classifiedByEmbeddings + classifiedByLlm).toLocaleString()} / {rawTotal.toLocaleString()}
+        {(classifiedByEmbeddings + classifiedByLlm - borderlinePending).toLocaleString()} / {rawTotal.toLocaleString()}
       </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-2xs" style={{ color: 'var(--text-muted)' }}>
         <div>embeddings: {classifiedByEmbeddings.toLocaleString()}</div>
@@ -206,21 +206,17 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
           <PipelineStage
             index={4}
             label="Summarize"
-            value={`${stats.summarized_total?.toLocaleString() ?? 0} / ${((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)).toLocaleString()}`}
+            value={`${stats.summarized_total?.toLocaleString() ?? 0} / ${total.toLocaleString()}`}
             sub="с summary"
-            pct={(stats.summarized_total ?? 0) + (stats.summary_pending ?? 0) > 0
-              ? (stats.summarized_total / ((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0))) * 100
-              : 0}
+            pct={total > 0 ? ((stats.summarized_total ?? 0) / total) * 100 : 0}
           />
           <PipelineArrow />
           <PipelineStage
             index={5}
             label="Vectorize"
-            value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)).toLocaleString()}`}
+            value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${total.toLocaleString()}`}
             sub="в Qdrant"
-            pct={((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)) > 0
-              ? ((stats.embedded_total ?? 0) / ((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0))) * 100
-              : 0}
+            pct={total > 0 ? ((stats.embedded_total ?? 0) / total) * 100 : 0}
           />
         </div>
       )}

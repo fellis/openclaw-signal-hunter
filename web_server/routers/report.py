@@ -1,7 +1,7 @@
 """
 Report API router.
 Provides hierarchical signal data: categories -> clusters -> signals.
-Clustering is lazy (computed per category on demand, cached 24h).
+All report endpoints use a single centralized cache (REPORT_CACHE_TTL).
 """
 
 from __future__ import annotations
@@ -26,6 +26,9 @@ from web_server.services.clustering import (
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Centralized report cache: all report endpoints use the same TTL.
+REPORT_CACHE_TTL = 10
 
 _SOURCE_ORDER = [
     "github_issue", "github_discussion", "hn_post", "so_question",
@@ -252,7 +255,7 @@ async def get_report(
     )
 
     result = {"total_signals": sum(c["count"] for c in sorted_cats), "categories": sorted_cats}
-    cache.set("report", cache_key, value=result, ttl=1800)
+    cache.set("report", cache_key, value=result, ttl=REPORT_CACHE_TTL)
     return result
 
 
@@ -289,7 +292,7 @@ async def get_clusters(
 
     if category not in groups:
         result = {"clusters": []}
-        cache.set("clusters", cache_key, value=result, ttl=86400)
+        cache.set("clusters", cache_key, value=result, ttl=REPORT_CACHE_TTL)
         return result
 
     cat_data = groups[category]
@@ -313,7 +316,7 @@ async def get_clusters(
         cluster_names = cached_names
     else:
         cluster_names = name_clusters(clusters, titles_by_id, parent_category=category)
-        cache.set("cluster_names", cluster_key, value=cluster_names, ttl=86400)
+        cache.set("cluster_names", cluster_key, value=cluster_names, ttl=REPORT_CACHE_TTL)
 
     # Build cluster response
     result_clusters = []
@@ -355,7 +358,7 @@ async def get_clusters(
     # Sort clusters by rank_score (sum) desc
     result_clusters.sort(key=lambda c: c["rank_score"], reverse=True)
     result = {"clusters": result_clusters}
-    cache.set("clusters", cache_key, value=result, ttl=1800)
+    cache.set("clusters", cache_key, value=result, ttl=REPORT_CACHE_TTL)
     return result
 
 
@@ -554,7 +557,7 @@ async def get_filter_counts(
         "keywords":    _to_map(keyword_rows, "kw"),
         "intensities": _to_map(intensity_rows, "name"),
     }
-    cache.set("filter_counts", cache_key, value=result, ttl=120)
+    cache.set("filter_counts", cache_key, value=result, ttl=REPORT_CACHE_TTL)
     return result
 
 
@@ -605,7 +608,7 @@ async def get_stats(request: Request):
     """)
 
     result = dict(row) if row else {}
-    cache.set("stats", value=result, ttl=10)
+    cache.set("stats", value=result, ttl=REPORT_CACHE_TTL)
     return result
 
 
