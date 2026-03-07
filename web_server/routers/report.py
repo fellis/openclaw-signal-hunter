@@ -459,155 +459,102 @@ async def get_keywords():
     return {"keywords": [r["canonical_name"] for r in rows]}
 
 
-@router.get("/categories/counts")
-async def get_category_counts(
+def _add_category_condition(where: str, params: list, categories: list[str]) -> tuple[str, list]:
+    """Append a category filter condition to an existing WHERE clause."""
+    if not categories:
+        return where, params
+    where += (
+        " AND EXISTS ("
+        "  SELECT 1 FROM jsonb_array_elements(p.matched_rules) AS mr"
+        "  WHERE mr->>'rule_name' = ANY(%s)"
+        ")"
+    )
+    return where, params + [categories]
+
+
+@router.get("/filter-counts")
+async def get_filter_counts(
     request: Request,
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     sources: list[str] = Query(default=[]),
-    keywords: list[str] = Query(default=[]),
-    intensities: list[int] = Query(default=[]),
-    confidence_min: float | None = Query(None, ge=0.0, le=1.0),
-    confidence_max: float | None = Query(None, ge=0.0, le=1.0),
-):
-    """Return signal counts per category respecting current filters (excluding category filter)."""
-    cache = request.app.state.cache
-    cache_key = dict(
-        date_from=date_from, date_to=date_to, sources=sorted(sources),
-        keywords=sorted(keywords), intensities=sorted(intensities),
-        confidence_min=confidence_min, confidence_max=confidence_max,
-    )
-    cached = cache.get("category_counts", cache_key)
-    if cached is not None:
-        return cached
-
-    where, params = _build_where(
-        date_from, date_to, sources=sources, intensities=intensities,
-        confidence_min=confidence_min, confidence_max=confidence_max,
-        keywords=keywords,
-    )
-
-    rows = _fetch_signals(where, params)
-    groups = _aggregate_signals(rows, category_filter=[])
-
-    result = {
-        "counts": [
-            {"name": name, "count": data["count"]}
-            for name, data in groups.items()
-        ]
-    }
-    cache.set("category_counts", cache_key, value=result, ttl=120)
-    return result
-
-
-@router.get("/sources/counts")
-async def get_source_counts(
-    request: Request,
-    date_from: str | None = Query(None),
-    date_to: str | None = Query(None),
     categories: list[str] = Query(default=[]),
     keywords: list[str] = Query(default=[]),
     intensities: list[int] = Query(default=[]),
     confidence_min: float | None = Query(None, ge=0.0, le=1.0),
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
 ):
-    """Return signal counts per source respecting current filters (excluding source filter)."""
-    cache = request.app.state.cache
-    cache_key = dict(
-        date_from=date_from, date_to=date_to, categories=sorted(categories),
-        keywords=sorted(keywords), intensities=sorted(intensities),
-        confidence_min=confidence_min, confidence_max=confidence_max,
-    )
-    cached = cache.get("source_counts", cache_key)
-    if cached is not None:
-        return cached
-
-    where, params = _build_where(
-        date_from, date_to, sources=[], intensities=intensities,
-        confidence_min=confidence_min, confidence_max=confidence_max,
-        keywords=keywords,
-    )
-
-    if categories:
-        where += (
-            " AND EXISTS ("
-            "  SELECT 1 FROM jsonb_array_elements(p.matched_rules) AS mr"
-            "  WHERE mr->>'rule_name' = ANY(%s)"
-            ")"
-        )
-        params = params + [categories]
-
-    rows = fetchall(
-        f"""
-        SELECT r.source, COUNT(*) AS count
-        FROM processed_signals p
-        JOIN raw_signals r ON r.id = p.raw_signal_id
-        WHERE {where}
-        GROUP BY r.source
-        ORDER BY count DESC
-        """,
-        params,
-    )
-
-    result = {"counts": [{"name": r["source"], "count": r["count"]} for r in rows]}
-    cache.set("source_counts", cache_key, value=result, ttl=120)
-    return result
-
-
-@router.get("/keywords/counts")
-async def get_keyword_counts(
-    request: Request,
-    date_from: str | None = Query(None),
-    date_to: str | None = Query(None),
-    sources: list[str] = Query(default=[]),
-    categories: list[str] = Query(default=[]),
-    intensities: list[int] = Query(default=[]),
-    confidence_min: float | None = Query(None, ge=0.0, le=1.0),
-    confidence_max: float | None = Query(None, ge=0.0, le=1.0),
-):
-    """Return keyword signal counts respecting current filters (excluding keyword filter itself).
-    Used to show live counts in the keyword multiselect dropdown.
+    """Return signal counts for all filter dimensions in a single request.
+    Each dimension excludes its own filter so counts reflect what would remain
+    after selecting that value.
+    Returns: { sources, categories, keywords, intensities } each as {name: count}.
     """
     cache = request.app.state.cache
     cache_key = dict(
-        date_from=date_from, date_to=date_to, sources=sorted(sources),
-        categories=sorted(categories), intensities=sorted(intensities),
+        date_from=date_from, date_to=date_to,
+        sources=sorted(sources), categories=sorted(categories),
+        keywords=sorted(keywords), intensities=sorted(intensities),
         confidence_min=confidence_min, confidence_max=confidence_max,
     )
-    cached = cache.get("keyword_counts", cache_key)
+    cached = cache.get("filter_counts", cache_key)
     if cached is not None:
         return cached
 
-    where, params = _build_where(
-        date_from, date_to, sources, intensities,
-        confidence_min, confidence_max, keywords=[],
+    # Base WHERE without any dimension filter - used as starting point for each
+    base_where, base_params = _build_where(
+        date_from, date_to, sources=[], intensities=[],
+        confidence_min=confidence_min, confidence_max=confidence_max,
+        keywords=[],
     )
 
-    # Add category filter directly in SQL via jsonb matched_rules check
-    if categories:
-        where += (
-            " AND EXISTS ("
-            "  SELECT 1 FROM jsonb_array_elements(p.matched_rules) AS mr"
-            "  WHERE mr->>'rule_name' = ANY(%s)"
-            ")"
-        )
-        params = params + [categories]
+    def _to_map(rows: list[dict], key: str) -> dict[str, int]:
+        return {r[key]: r["count"] for r in rows}
 
-    rows = fetchall(
-        f"""
-        SELECT kw, COUNT(*) AS count
-        FROM processed_signals p
-        JOIN raw_signals r ON r.id = p.raw_signal_id
-        JOIN LATERAL unnest(p.keywords_matched) AS kw ON true
-        WHERE {where}
-        GROUP BY kw
-        ORDER BY count DESC
-        """,
-        params,
+    # --- Sources (exclude source filter, apply all others) ---
+    sw, sp = _build_where(date_from, date_to, sources=[], intensities=intensities,
+                          confidence_min=confidence_min, confidence_max=confidence_max, keywords=keywords)
+    sw, sp = _add_category_condition(sw, sp, categories)
+    source_rows = fetchall(
+        f"SELECT r.source, COUNT(*) AS count FROM processed_signals p "
+        f"JOIN raw_signals r ON r.id = p.raw_signal_id WHERE {sw} GROUP BY r.source",
+        sp,
     )
 
-    result = {"counts": [{"name": r["kw"], "count": r["count"]} for r in rows]}
-    cache.set("keyword_counts", cache_key, value=result, ttl=120)
+    # --- Categories (exclude category filter, apply all others) ---
+    cw, cp = _build_where(date_from, date_to, sources=sources, intensities=intensities,
+                          confidence_min=confidence_min, confidence_max=confidence_max, keywords=keywords)
+    cat_rows = _fetch_signals(cw, cp)
+    cat_groups = _aggregate_signals(cat_rows, category_filter=[])
+
+    # --- Keywords (exclude keyword filter, apply all others) ---
+    kw_where, kw_params = _build_where(date_from, date_to, sources=sources, intensities=intensities,
+                                       confidence_min=confidence_min, confidence_max=confidence_max, keywords=[])
+    kw_where, kw_params = _add_category_condition(kw_where, kw_params, categories)
+    keyword_rows = fetchall(
+        f"SELECT kw, COUNT(*) AS count FROM processed_signals p "
+        f"JOIN raw_signals r ON r.id = p.raw_signal_id "
+        f"JOIN LATERAL unnest(p.keywords_matched) AS kw ON true "
+        f"WHERE {kw_where} GROUP BY kw ORDER BY count DESC",
+        kw_params,
+    )
+
+    # --- Intensities (exclude intensity filter, apply all others) ---
+    iw, ip = _build_where(date_from, date_to, sources=sources, intensities=[],
+                          confidence_min=confidence_min, confidence_max=confidence_max, keywords=keywords)
+    iw, ip = _add_category_condition(iw, ip, categories)
+    intensity_rows = fetchall(
+        f"SELECT p.intensity::text AS name, COUNT(*) AS count FROM processed_signals p "
+        f"JOIN raw_signals r ON r.id = p.raw_signal_id WHERE {iw} GROUP BY p.intensity ORDER BY p.intensity",
+        ip,
+    )
+
+    result = {
+        "sources":     _to_map(source_rows, "source"),
+        "categories":  {name: data["count"] for name, data in cat_groups.items()},
+        "keywords":    _to_map(keyword_rows, "kw"),
+        "intensities": _to_map(intensity_rows, "name"),
+    }
+    cache.set("filter_counts", cache_key, value=result, ttl=120)
     return result
 
 

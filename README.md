@@ -15,6 +15,7 @@ You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
 7. **Generates change reports** - weekly/monthly deltas with what's new and what grew
+8. **Web report UI** - browse signals by category, cluster, and individual posts at port 8080. Supports semantic and full-text search, date/source/intensity filters, and EN/RU language toggle
 
 Everything runs on a VPS, fully offline (except for API calls to data sources and the LLM providers you configure).
 
@@ -26,13 +27,15 @@ Everything runs on a VPS, fully offline (except for API calls to data sources an
 |---|---|
 | **Python 3.11+** | Core skill logic |
 | **TypeScript** | OpenClaw plugin adapter (thin wrapper) |
-| **PostgreSQL 16** | Structured storage: signals, profiles, cursors, LLM cost log |
+| **PostgreSQL 16** | Structured storage: signals, profiles, cursors, translations, LLM cost log |
 | **Qdrant** | Vector search (cosine, 1024 dims) |
 | **BAAI/bge-m3** | Cross-lingual embeddings via `sentence-transformers` |
 | **Embedder service** | Two FastAPI containers - `embedder:6335` for classify/query, `embedder-vectorizer:6336` for Qdrant upserts; model loaded once, both share `hf_cache` volume |
 | **Local LLM** | Summary generation, rule suggestions, keyword enrichment (OpenAI-compatible endpoint) |
 | **Claude (Anthropic)** | Queries, resolution strategy (configurable) |
-| **Docker Compose** | PostgreSQL + Qdrant + Embedder (classify) + Embedder-Vectorizer (upsert) |
+| **MADLAD-400-3B** | Multilingual machine translation (CTranslate2, INT8). Translates signal titles and summaries to Russian. Runs as a separate FastAPI service, accessed via `llm-api` proxy |
+| **Web Report** | React + Vite SPA served by FastAPI on port 8080. Three-level drill-down: categories → clusters → signals. Semantic and full-text search, EN/RU language toggle |
+| **Docker Compose** | PostgreSQL + Qdrant + Embedder (classify) + Embedder-Vectorizer (upsert) + Web Report |
 
 ---
 
@@ -49,33 +52,55 @@ src/runner.ts         ← spawns: python -m skill <command> [args]
      ▼  JSON via stdout
 skill/main.py         ← CLI dispatcher
      │
-     ├── core/resolver.py      ← keyword discovery + LLM enrichment
-     ├── core/orchestrator.py  ← collect → embed pipeline
+     ├── core/resolver.py        ← keyword discovery + LLM enrichment
+     ├── core/orchestrator.py    ← collect → embed pipeline
      ├── core/embed_processor.py ← embedding-based classify (no LLM, default mode)
-     ├── core/embed_worker.py  ← embed worker: runs EmbedProcessor per cron tick
-     ├── core/processor.py     ← LLM classification fallback (mode: "llm")
-     ├── core/embedder.py      ← HTTP client → embedder service → Qdrant (Outbox pattern)
-     ├── core/llm_router.py    ← routes ops to local/Claude by config
-     ├── core/llm_worker.py    ← LLM task queue worker (resolve + summarize_batch only)
+     ├── core/embed_worker.py    ← embed worker: runs EmbedProcessor per cron tick
+     ├── core/processor.py       ← LLM classification fallback (mode: "llm")
+     ├── core/embedder.py        ← HTTP client → embedder service → Qdrant (Outbox pattern)
+     ├── core/llm_router.py      ← routes ops to local/Claude by config
+     ├── core/llm_worker.py      ← LLM task queue worker (resolve + summarize_batch only)
+     ├── core/translate_worker.py ← translation worker: one batch per LLM Worker tick
+     │                              translates title+summary → signal_translations table
      │
      ├── collectors/
-     │   ├── github.py         ← GitHub Issues (repo-scoped, cursor on updated_at)
-     │   ├── huggingface.py    ← HF model/space discussions + papers
-     │   ├── hackernews.py     ← Algolia HN API (no auth)
-     │   ├── stackoverflow.py  ← Stack Exchange API v2.3
-     │   └── reddit.py         ← Reddit JSON API / OAuth (60 req/min with token)
+     │   ├── github.py           ← GitHub Issues (repo-scoped, cursor on updated_at)
+     │   ├── huggingface.py      ← HF model/space discussions + papers
+     │   ├── hackernews.py       ← Algolia HN API (no auth)
+     │   ├── stackoverflow.py    ← Stack Exchange API v2.3
+     │   └── reddit.py           ← Reddit JSON API / OAuth (60 req/min with token)
+     │
+     ├── web_server/             ← FastAPI web report server (port 8080)
+     │   ├── app.py              ← application entry point
+     │   ├── db.py               ← psycopg2 helpers
+     │   ├── routers/
+     │   │   ├── report.py       ← /api/report, /api/report/clusters, /api/report/signals
+     │   │   └── search.py       ← /api/search/semantic, /api/search/text
+     │   └── services/
+     │       └── clustering.py   ← HDBSCAN/KMeans cluster strategies
+     │
+     ├── frontend/               ← React + Vite SPA (built into Dockerfile.web)
+     │   └── src/
+     │       ├── pages/          ← Report, Charts, Search
+     │       ├── components/     ← SignalTable (3-level drill-down), FilterPanel, ...
+     │       └── api/            ← fetch helpers (report.ts, search.ts)
      │
      └── storage/
-         ├── postgres.py       ← all SQL (raw_signals, processed_signals, llm_task_queue...)
-         ├── vector.py         ← Qdrant wrapper
-         └── config_manager.py ← atomic config.json writes (temp file + rename)
+         ├── postgres.py         ← all SQL (raw_signals, processed_signals, signal_translations...)
+         ├── vector.py           ← Qdrant wrapper
+         └── config_manager.py  ← atomic config.json writes (temp file + rename)
 
 Docker Compose services:
-     ├── postgres:5433              ← PostgreSQL 16
-     ├── qdrant:6333                ← Qdrant vector DB
-     ├── embedder:6335              ← FastAPI + bge-m3, used by classifier + query
-     └── embedder-vectorizer:6336   ← same image, dedicated to Qdrant upserts (outbox)
-           embedder_service.py ← /embed (batch) + /embed-query + /health
+     ├── postgres:5433               ← PostgreSQL 16
+     ├── qdrant:6333                 ← Qdrant vector DB
+     ├── embedder:6335               ← FastAPI + bge-m3, used by classifier + query
+     ├── embedder-vectorizer:6336    ← same image, dedicated to Qdrant upserts (outbox)
+     │     embedder_service.py ← /embed (batch) + /embed-query + /health
+     └── web-report:8080             ← FastAPI + React UI (Dockerfile.web)
+
+External services (not in docker-compose):
+     └── MADLAD-400-3B translator    ← CTranslate2 INT8 on a separate GPU server
+           accessed via https://llm.aegisalpha.io/translator (llm-api proxy)
 ```
 
 **Design principles:**
@@ -83,7 +108,7 @@ Docker Compose services:
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
 - **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > summarize_batch(90)
-- **Four separate cron jobs:** Embed Worker (every minute) classifies signals via embeddings (no LLM) using `embedder:6335`; LLM Worker (every minute) handles resolve + summarize; Collect Worker (every 5 min) handles API collection; Auto Embed (every minute) vectorizes classified signals into Qdrant using `embedder-vectorizer:6336` - classification and vectorization never compete for the same embedder instance
+- **Four separate cron jobs:** Embed Worker (every minute) classifies signals via embeddings (no LLM) using `embedder:6335`; LLM Worker (every minute) handles resolve + summarize + translate (in one tick); Collect Worker (every 5 min) handles API collection; Auto Embed (every minute) vectorizes classified signals into Qdrant using `embedder-vectorizer:6336` - classification and vectorization never compete for the same embedder instance
 - **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
 - **Daily collection per keyword:** Collect Worker locks each keyword with `last_collected_at = now()` before collecting; re-triggers only after 24h; stalest keywords first
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
@@ -97,10 +122,11 @@ Docker Compose services:
 ## Prerequisites
 
 - VPS or local machine with Python 3.11+
-- Docker + Docker Compose (for PostgreSQL, Qdrant, Embedder, and Embedder-Vectorizer)
+- Docker + Docker Compose (for PostgreSQL, Qdrant, Embedder, Embedder-Vectorizer, Web Report)
 - [OpenClaw](https://github.com/openclaw) installed
 - Local LLM with OpenAI-compatible API (e.g. [Ollama](https://ollama.com) with Devstral, Mistral, etc.)
 - Anthropic API key (for queries and keyword resolution strategy)
+- MADLAD-400 translator service (optional, for EN/RU translations) - FastAPI + CTranslate2 container, accessible via HTTP with Bearer token
 
 ---
 
@@ -144,6 +170,13 @@ LOCAL_LLM_MODEL=devstral
 
 # Anthropic Claude
 ANTHROPIC_API_KEY=sk-ant-your_key_here
+
+# Translation service (MADLAD-400-3B, optional)
+# URL of the FastAPI translator endpoint (can be proxied via llm-api)
+TRANSLATOR_URL=https://llm.aegisalpha.io/translator
+TRANSLATOR_API_KEY=your_bearer_token_here
+# Target language for translation worker (ISO 639-1, e.g. "ru", "de", "fr")
+TARGET_LANG=ru
 ```
 
 ### 3. Create config.json
@@ -162,19 +195,22 @@ cp config.example.json config.json
 docker compose up -d
 ```
 
-This starts four services:
+This starts five services:
 - **PostgreSQL 16** (port 5433) - schema applied automatically on first start
 - **Qdrant** (port 6333) - vector storage, data persisted in `qdrantdata` volume
 - **Embedder** (port 6335) - FastAPI + bge-m3; used by Embed Worker (classification) and semantic query. Downloads model on first start (~570MB, cached in `hf_cache` volume)
 - **Embedder-Vectorizer** (port 6336) - same image, dedicated to Auto Embed (Qdrant upserts). Shares `hf_cache` volume - no re-download
+- **Web Report** (port 8080) - React + FastAPI; serves the web UI and `/api/*` endpoints
 
-Check both embedders are ready:
+Check all services are ready:
 
 ```bash
 curl http://localhost:6335/health
 # {"status":"ok","model":"BAAI/bge-m3","ready":true}
 curl http://localhost:6336/health
 # {"status":"ok","model":"BAAI/bge-m3","ready":true}
+curl http://localhost:8080/api/stats
+# {"total_signals": ..., "relevant": ...}
 ```
 
 ### 5. Install Python dependencies
@@ -316,6 +352,9 @@ LLM Worker tick (every 1 min, independent):
   → resolve pending keywords (LLM)
   → summarize_batch: generate summaries for classified signals (LLM)
     → adds to embedding_queue after summary is ready
+  → translate_worker: translate title+summary for embedded signals
+    → skips signals already in TARGET_LANG
+    → stores results in signal_translations (signal_id / lang / field / text)
 ```
 
 First run fetches 90 days of history per source. Subsequent runs are incremental (cursor-based). Check status:
@@ -461,13 +500,33 @@ You: this looks good, save this as the report template for ollama
 
 ---
 
-### Step 9 - Automation (cron)
+### Step 9 - Web report
+
+Open the web UI in the browser:
+
+```
+http://your-vps:8080
+```
+
+The UI has three main sections:
+
+- **Report** - three-level signal browser: categories (top-level themes) → clusters (signal groups within a category) → individual signals with title, summary, source, date, intensity. Signals load on demand as you expand categories/clusters.
+- **Charts** - timeline and breakdown visualizations.
+- **Search** - semantic search (via Qdrant) and full-text search (PostgreSQL), with filters by source, date range, and intensity.
+
+**Language toggle (EN / RU):** Switch between English (original content) and Russian (machine-translated by MADLAD-400-3B). The toggle is in the sidebar. The selected language is persisted across sessions. Signals that have been translated show the language badge in the title row. Untranslated signals (translation still pending or worker not configured) fall back to the original English.
+
+The translation worker runs as part of the LLM Worker cron tick - no separate container or cron needed.
+
+---
+
+### Step 10 - Automation (cron)
 
 Four cron jobs run continuously and independently:
 
 | Cron | Schedule | What it does |
 |---|---|---|
-| **LLM Worker** | `* * * * *` (every 1 min) | resolve keywords + summarize_batch (LLM only, no collection) |
+| **LLM Worker** | `* * * * *` (every 1 min) | resolve keywords + summarize_batch (LLM) + translate batch (MADLAD-400) |
 | **Embed Worker** | `* * * * *` (every 1 min) | classify raw signals via embeddings (no LLM, no GPU) |
 | **Collect Worker** | `*/5 * * * *` (every 5 min) | picks 1 stalest keyword, fetches signals (no LLM) |
 | **Embed** | `*/10 * * * *` (every 10 min) | vectorizes summarized signals into Qdrant |
@@ -475,6 +534,8 @@ Four cron jobs run continuously and independently:
 LLM Worker task priorities (sequential, one at a time):
 - `resolve` (priority 50) - keyword enrichment + auto-approved collection plan
 - `summarize_batch` (priority 90) - generate summaries for classified signals (auto-enqueued)
+
+After the LLM task queue is drained each tick, `TranslateWorker.run()` is called automatically - one batch of 32 embedded signals (with summary, not yet translated to `TARGET_LANG`) is sent to the MADLAD-400 service. Results are stored in `signal_translations`.
 
 Embed Worker per tick (no LLM, runs independently):
 - Fetches raw signals with no `processed_signals` row (up to `batch_size * max_batches_per_run`)
@@ -488,6 +549,14 @@ Collect Worker per tick:
 - Fetches GitHub, HF, HN, SO, Reddit - expands plan with new repos/spaces
 - Multiple ticks can run concurrently on different keywords safely
 
+Translate Worker per LLM Worker tick (runs after task queue is drained):
+- Fetches up to 32 embedded signals where `summary IS NOT NULL` and `embedding_queue.status = 'done'`
+- Skips signals already in `TARGET_LANG` (e.g. Russian signals when `TARGET_LANG=ru`)
+- Skips signals already translated for `TARGET_LANG` in `signal_translations`
+- Calls `POST TRANSLATOR_URL/translate` with Bearer token auth
+- Upserts `(signal_id, lang, field, text)` rows into `signal_translations`
+- Returns `{status, translated, rows_stored, remaining}` (logged by LLM Worker)
+
 All cron jobs run silently (`delivery.mode: none`) - no Telegram noise.
 
 **Full automated lifecycle after adding a keyword:**
@@ -497,6 +566,7 @@ queue_resolve → resolve (LLM, ~1 min) → auto-approved plan
              → Embed Worker classifies instantly (no LLM) → summary=null
              → LLM Worker summarize_batch → adds to embedding_queue
              → Embed cron (every 10 min) → Qdrant
+             → LLM Worker translate_worker → signal_translations (EN→RU or other)
              → GitHub/HF plan auto-expanded with new repos on each collect
 ```
 
@@ -511,7 +581,7 @@ You: что в очереди?
 
 ---
 
-### Step 10 - Manage the embedder service
+### Step 11 - Manage the embedder service
 
 The embedder runs as a Docker container. Manage it from chat:
 
@@ -702,6 +772,48 @@ PostgreSQL tables:
 | `change_report_snapshots` | Saved report history |
 | `llm_task_queue` | LLM task queue: resolve(50) / summarize_batch(90), priority-ordered |
 | `llm_usage_log` | Token usage and cost per operation |
+| `signal_translations` | Machine-translated titles and summaries per language (signal_id / lang / field / text) |
+
+`signal_translations` schema:
+
+```sql
+CREATE TABLE IF NOT EXISTS signal_translations (
+    signal_id   UUID    NOT NULL REFERENCES raw_signals(id) ON DELETE CASCADE,
+    lang        TEXT    NOT NULL,   -- 'ru', 'de', 'fr', ...
+    field       TEXT    NOT NULL,   -- 'title', 'summary'
+    text        TEXT    NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (signal_id, lang, field)
+);
+```
+
+The Web Report API joins `signal_translations` via `LEFT JOIN` when `lang != 'en'`. If no translation is available for a signal, the original English content is returned with `translation_available: false`.
+
+---
+
+## Web Report API
+
+The `web-report` container exposes a REST API alongside the React SPA:
+
+```
+GET  /api/stats
+     → {total_signals, relevant, embedded, ...}
+
+GET  /api/report/categories?lang=en
+     → [{id, label, signal_count, top_signal}, ...]
+
+GET  /api/report/clusters?category_id=...&lang=en
+     → [{id, label, signal_count, signals:[...]}, ...]
+
+GET  /api/report/signals?cluster_id=...&lang=en&limit=50&offset=0
+     → [{id, title, summary, source, url, rank_score,
+          title_original, summary_original, translation_available}, ...]
+
+GET  /api/search/semantic?q=...&lang=en&limit=20
+GET  /api/search/text?q=...&lang=en&source=github&limit=20
+```
+
+All signal-returning endpoints accept `lang` (`en` or `ru`). When `lang=en`, original content is returned unchanged. When `lang=ru`, translated fields from `signal_translations` are substituted; fields with no translation fall back to originals with `translation_available: false`.
 
 ---
 
@@ -754,6 +866,8 @@ Then restart the OpenClaw container. The worker will create a fresh isolated ses
 | LLM Worker | `isolated` | `agentTurn` | `none` |
 | Collect Worker | `isolated` | `agentTurn` | `none` |
 | Auto Embed | `isolated` | `agentTurn` | `none` |
+
+> The translation worker does not have its own cron. It runs inside each LLM Worker tick after the task queue is drained.
 
 > Note: OpenClaw may overwrite `delivery.mode` back to `"announce"` after the first cron run. If skipping resumes, re-apply the fix.
 

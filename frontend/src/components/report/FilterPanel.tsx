@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Filter, X, ChevronDown } from 'lucide-react'
 import { cn, formatCategoryName, intensityLabel } from '@/lib/utils'
 import type { Filters, Rule } from '@/types'
-import { fetchKeywords, fetchKeywordCounts, fetchSourceCounts, fetchCategoryCounts } from '@/api/report'
+import { fetchKeywords, fetchFilterCounts, type FilterCounts } from '@/api/report'
 
 const SOURCES = [
   'github_issue', 'github_discussion', 'hn_post',
@@ -171,24 +171,22 @@ function RangeFilter({
   )
 }
 
+const EMPTY_COUNTS: FilterCounts = { sources: {}, categories: {}, keywords: {}, intensities: {} }
+
 export default function FilterPanel({ filters, onChange, rules }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
-  const [keywordCounts, setKeywordCounts] = useState<Record<string, number>>({})
-  const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({})
-  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({})
+  const [counts, setCounts] = useState<FilterCounts>(EMPTY_COUNTS)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     fetchKeywords().then(setKeywords)
   }, [])
 
-  // Re-fetch source and keyword counts when relevant filters change (debounced 400ms)
+  // Re-fetch all filter counts in a single request when filters change (debounced 400ms)
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      fetchKeywordCounts(filters).then(setKeywordCounts)
-      fetchSourceCounts(filters).then(setSourceCounts)
-      fetchCategoryCounts(filters).then(setCategoryCounts)
+      fetchFilterCounts(filters).then(setCounts)
     }, 400)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [
@@ -261,7 +259,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         selected={filters.sources}
         onChange={v => onChange({ sources: v })}
         labelMap={SOURCE_LABELS}
-        counts={sourceCounts}
+        counts={counts.sources}
       />
       <MultiSelect
         label="Category"
@@ -269,14 +267,14 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         selected={filters.categories}
         onChange={v => onChange({ categories: v })}
         labelMap={categoryLabelMap}
-        counts={categoryCounts}
+        counts={counts.categories}
       />
       <MultiSelect
         label="Keyword"
         options={keywords}
         selected={filters.keywords}
         onChange={v => onChange({ keywords: v })}
-        counts={keywordCounts}
+        counts={counts.keywords}
       />
       <MultiSelect
         label="Intensity"
@@ -284,6 +282,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         selected={filters.intensities.map(String)}
         onChange={v => onChange({ intensities: v.map(Number) })}
         labelMap={INTENSITY_LABELS}
+        counts={counts.intensities}
       />
       <RangeFilter
         label="Confidence"

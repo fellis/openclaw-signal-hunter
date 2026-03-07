@@ -70,58 +70,21 @@ export async function fetchRules(): Promise<Rule[]> {
   return data.rules || []
 }
 
-export async function fetchCategoryCounts(
-  filters: Partial<Filters>,
-): Promise<Record<string, number>> {
-  const qs = buildQueryString({
-    date_from: filters.date_from || '',
-    date_to: filters.date_to || '',
-    sources: filters.sources || [],
-    keywords: filters.keywords || [],
-    intensities: filters.intensities || [],
-    confidence_min: filters.confidence_min ?? '',
-    confidence_max: filters.confidence_max ?? '',
-  })
-  const res = await fetch(`/api/categories/counts?${qs}`)
-  if (!res.ok) return {}
-  const data = await res.json()
-  return Object.fromEntries((data.counts || []).map((c: { name: string; count: number }) => [c.name, c.count]))
+export interface FilterCounts {
+  sources: Record<string, number>
+  categories: Record<string, number>
+  keywords: Record<string, number>
+  intensities: Record<string, number>
 }
 
-export async function fetchSourceCounts(
+export async function fetchFilterCounts(
   filters: Partial<Filters>,
-): Promise<Record<string, number>> {
-  const qs = buildQueryString({
-    date_from: filters.date_from || '',
-    date_to: filters.date_to || '',
-    categories: filters.categories || [],
-    keywords: filters.keywords || [],
-    intensities: filters.intensities || [],
-    confidence_min: filters.confidence_min ?? '',
-    confidence_max: filters.confidence_max ?? '',
-  })
-  const res = await fetch(`/api/sources/counts?${qs}`)
-  if (!res.ok) return {}
-  const data = await res.json()
-  return Object.fromEntries((data.counts || []).map((c: { name: string; count: number }) => [c.name, c.count]))
-}
-
-export async function fetchKeywordCounts(
-  filters: Partial<Filters>,
-): Promise<Record<string, number>> {
-  const qs = buildQueryString({
-    date_from: filters.date_from || '',
-    date_to: filters.date_to || '',
-    sources: filters.sources || [],
-    categories: filters.categories || [],
-    intensities: filters.intensities || [],
-    confidence_min: filters.confidence_min ?? '',
-    confidence_max: filters.confidence_max ?? '',
-  })
-  const res = await fetch(`/api/keywords/counts?${qs}`)
-  if (!res.ok) return {}
-  const data = await res.json()
-  return Object.fromEntries((data.counts || []).map((c: { name: string; count: number }) => [c.name, c.count]))
+): Promise<FilterCounts> {
+  const empty: FilterCounts = { sources: {}, categories: {}, keywords: {}, intensities: {} }
+  const qs = buildQueryString(filtersToParams(filters))
+  const res = await fetch(`/api/filter-counts?${qs}`)
+  if (!res.ok) return empty
+  return res.json()
 }
 
 export async function fetchStats(): Promise<StatsResponse> {
