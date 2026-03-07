@@ -81,6 +81,8 @@ export interface StatsResponse {
   irrelevant_total: number
   processed_total: number
   unprocessed: number
+  classified_by_embeddings: number
+  classified_by_llm: number
   embedded_total: number
   pending_embeddings: number
   keywords_total: number

@@ -486,6 +486,7 @@ class EmbedProcessor:
             language=cls.get("language") or "en",
             rank_score=rank_score,
             borderline_override_pending=borderline_override_pending,
+            classification_source="embedding",
         )
 
     @staticmethod

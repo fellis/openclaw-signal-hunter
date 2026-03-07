@@ -591,6 +591,8 @@ async def get_stats(request: Request):
             (SELECT COUNT(*) FROM processed_signals WHERE is_relevant = false)::int AS irrelevant_total,
             (SELECT COUNT(*) FROM processed_signals)::int AS processed_total,
             (SELECT COUNT(*) FROM raw_signals) - (SELECT COUNT(*) FROM processed_signals) AS unprocessed,
+            (SELECT COUNT(*) FROM processed_signals WHERE classification_source = 'embedding')::int AS classified_by_embeddings,
+            (SELECT COUNT(*) FROM processed_signals WHERE classification_source = 'llm')::int AS classified_by_llm,
             (SELECT COUNT(*) FROM embedding_queue WHERE status = 'done')::int AS embedded_total,
             (SELECT COUNT(*) FROM embedding_queue WHERE status = 'pending')::int AS pending_embeddings,
             (SELECT COUNT(*) FROM keyword_profiles)::int AS keywords_total,

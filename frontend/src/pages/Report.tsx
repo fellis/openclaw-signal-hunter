@@ -70,6 +70,65 @@ function PipelineArrow() {
   )
 }
 
+interface PipelineStageClassifyProps {
+  index: number
+  processedTotal: number
+  rawTotal: number
+  relevantTotal: number
+  classifiedByEmbeddings: number
+  classifiedByLlm: number
+  unprocessed: number
+  borderlinePending: number
+}
+
+function PipelineStageClassify({
+  index,
+  processedTotal,
+  rawTotal,
+  relevantTotal,
+  classifiedByEmbeddings,
+  classifiedByLlm,
+  unprocessed,
+  borderlinePending,
+}: PipelineStageClassifyProps) {
+  const pct = rawTotal ? (processedTotal / rawTotal) * 100 : 0
+  return (
+    <div className="flex flex-col gap-1 min-w-[160px]" style={{ flex: '1 1 160px' }}>
+      <div className="flex items-center gap-1.5 mb-0.5">
+        <span
+          className="text-2xs font-semibold rounded-full flex items-center justify-center shrink-0"
+          style={{
+            width: 18, height: 18,
+            background: 'var(--bg-3, #1e1e2e)',
+            color: 'var(--text-muted)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          {index}
+        </span>
+        <span className="text-2xs uppercase tracking-wider font-medium" style={{ color: 'var(--text-muted)' }}>
+          Classify
+        </span>
+      </div>
+      <div className="text-base font-semibold tabular-nums leading-tight" style={{ color: 'var(--text)' }}>
+        {processedTotal.toLocaleString()} / {rawTotal.toLocaleString()}
+      </div>
+      <div className="text-2xs leading-tight" style={{ color: 'var(--text-muted)' }}>
+        relevant: {relevantTotal.toLocaleString()}
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-2xs" style={{ color: 'var(--text-muted)' }}>
+        <div>embeddings: {classifiedByEmbeddings.toLocaleString()}</div>
+        <div>LLM: {classifiedByLlm.toLocaleString()}</div>
+        <div>queue embeddings: {unprocessed.toLocaleString()}</div>
+        <div>queue LLM: {borderlinePending.toLocaleString()}</div>
+      </div>
+      <div className="mt-1 rounded-full overflow-hidden" style={{ height: 3, background: 'var(--border)' }}>
+        <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: 'var(--accent, #6366f1)', borderRadius: 9999 }} />
+      </div>
+    </div>
+  )
+}
+
 export default function Report({ lang = 'en' }: { lang?: string }) {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [categories, setCategories] = useState<Category[]>([])
@@ -146,24 +205,19 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
             sub={`новых за 24ч · всего ${stats.raw_total?.toLocaleString() ?? 0}`}
           />
           <PipelineArrow />
-          <PipelineStage
+          <PipelineStageClassify
             index={3}
-            label="Classify"
-            value={`${stats.processed_total?.toLocaleString() ?? 0} / ${stats.raw_total?.toLocaleString() ?? 0}`}
-            sub={`релевантных: ${stats.relevant_total?.toLocaleString() ?? 0}`}
-            pct={stats.raw_total ? (stats.processed_total / stats.raw_total) * 100 : 0}
+            processedTotal={stats.processed_total ?? 0}
+            rawTotal={stats.raw_total ?? 0}
+            relevantTotal={stats.relevant_total ?? 0}
+            classifiedByEmbeddings={stats.classified_by_embeddings ?? 0}
+            classifiedByLlm={stats.classified_by_llm ?? 0}
+            unprocessed={stats.unprocessed ?? 0}
+            borderlinePending={stats.borderline_pending ?? 0}
           />
           <PipelineArrow />
           <PipelineStage
             index={4}
-            label="LLM"
-            value={stats.borderline_pending?.toLocaleString() ?? '0'}
-            sub="ждут решения"
-            alert={(stats.borderline_pending ?? 0) > 500}
-          />
-          <PipelineArrow />
-          <PipelineStage
-            index={5}
             label="Summarize"
             value={`${stats.summarized_total?.toLocaleString() ?? 0} / ${((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)).toLocaleString()}`}
             sub="с summary"
@@ -173,7 +227,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
           />
           <PipelineArrow />
           <PipelineStage
-            index={6}
+            index={5}
             label="Vectorize"
             value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${((stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0)).toLocaleString()}`}
             sub="в Qdrant"

@@ -86,6 +86,7 @@ class ProcessedSignal:
     linked_group_id: str | None = None
     processed_at: datetime | None = None
     borderline_override_pending: bool = False
+    classification_source: str = "embedding"  # "embedding" | "llm" for report metrics
 
 
 @dataclass

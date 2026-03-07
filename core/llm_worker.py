@@ -248,6 +248,7 @@ class LLMWorker:
             ps = ep.classify_single(raw)
             ps.is_relevant = True
             ps.borderline_override_pending = False
+            ps.classification_source = "llm"
             self._storage.upsert_processed_signal(ps)
             log.info("[llm_worker] borderline RELEVANT: %s", dedup_key)
             return {"dedup_key": dedup_key, "relevant": True, "matched_rules": [r.rule_name for r in ps.matched_rules]}
