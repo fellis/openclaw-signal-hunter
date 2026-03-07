@@ -603,7 +603,7 @@ async def get_stats(request: Request):
     """)
 
     result = dict(row) if row else {}
-    cache.set("stats", value=result, ttl=300)
+    cache.set("stats", value=result, ttl=10)
     return result
 
 
