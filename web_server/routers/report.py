@@ -459,6 +459,47 @@ async def get_keywords():
     return {"keywords": [r["canonical_name"] for r in rows]}
 
 
+@router.get("/categories/counts")
+async def get_category_counts(
+    request: Request,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sources: list[str] = Query(default=[]),
+    keywords: list[str] = Query(default=[]),
+    intensities: list[int] = Query(default=[]),
+    confidence_min: float | None = Query(None, ge=0.0, le=1.0),
+    confidence_max: float | None = Query(None, ge=0.0, le=1.0),
+):
+    """Return signal counts per category respecting current filters (excluding category filter)."""
+    cache = request.app.state.cache
+    cache_key = dict(
+        date_from=date_from, date_to=date_to, sources=sorted(sources),
+        keywords=sorted(keywords), intensities=sorted(intensities),
+        confidence_min=confidence_min, confidence_max=confidence_max,
+    )
+    cached = cache.get("category_counts", cache_key)
+    if cached is not None:
+        return cached
+
+    where, params = _build_where(
+        date_from, date_to, sources=sources, intensities=intensities,
+        confidence_min=confidence_min, confidence_max=confidence_max,
+        keywords=keywords,
+    )
+
+    rows = _fetch_signals(where, params)
+    groups = _aggregate_signals(rows, category_filter=[])
+
+    result = {
+        "counts": [
+            {"name": name, "count": data["count"]}
+            for name, data in groups.items()
+        ]
+    }
+    cache.set("category_counts", cache_key, value=result, ttl=120)
+    return result
+
+
 @router.get("/sources/counts")
 async def get_source_counts(
     request: Request,

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Filter, X, ChevronDown } from 'lucide-react'
 import { cn, formatCategoryName, intensityLabel } from '@/lib/utils'
 import type { Filters, Rule } from '@/types'
-import { fetchKeywords, fetchKeywordCounts, fetchSourceCounts } from '@/api/report'
+import { fetchKeywords, fetchKeywordCounts, fetchSourceCounts, fetchCategoryCounts } from '@/api/report'
 
 const SOURCES = [
   'github_issue', 'github_discussion', 'hn_post',
@@ -175,6 +175,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
   const [keywordCounts, setKeywordCounts] = useState<Record<string, number>>({})
   const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({})
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({})
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -187,6 +188,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
     debounceRef.current = setTimeout(() => {
       fetchKeywordCounts(filters).then(setKeywordCounts)
       fetchSourceCounts(filters).then(setSourceCounts)
+      fetchCategoryCounts(filters).then(setCategoryCounts)
     }, 400)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [
@@ -267,6 +269,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         selected={filters.categories}
         onChange={v => onChange({ categories: v })}
         labelMap={categoryLabelMap}
+        counts={categoryCounts}
       />
       <MultiSelect
         label="Keyword"
