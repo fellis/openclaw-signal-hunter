@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Filter, X, ChevronDown } from 'lucide-react'
 import { cn, formatCategoryName, intensityLabel } from '@/lib/utils'
 import type { Filters, Rule } from '@/types'
-import { fetchKeywords } from '@/api/report'
+import { fetchKeywords, fetchKeywordCounts } from '@/api/report'
 
 const SOURCES = [
   'github_issue', 'github_discussion', 'hn_post',
@@ -25,17 +25,27 @@ interface Props {
 }
 
 function MultiSelect({
-  label, options, selected, onChange, labelMap,
+  label, options, selected, onChange, labelMap, counts,
 }: {
   label: string
   options: string[]
   selected: string[]
   onChange: (v: string[]) => void
   labelMap?: Record<string, string>
+  counts?: Record<string, number>
 }) {
   const [open, setOpen] = useState(false)
   const toggle = (v: string) =>
     onChange(selected.includes(v) ? selected.filter(s => s !== v) : [...selected, v])
+
+  // Sort options: selected first, then by count desc, then alpha
+  const sorted = [...options].sort((a, b) => {
+    const aSelected = selected.includes(a)
+    const bSelected = selected.includes(b)
+    if (aSelected !== bSelected) return aSelected ? -1 : 1
+    if (counts) return (counts[b] ?? 0) - (counts[a] ?? 0)
+    return a.localeCompare(b)
+  })
 
   return (
     <div className="relative">
@@ -61,10 +71,10 @@ function MultiSelect({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div
-            className="absolute top-full left-0 mt-1 z-20 min-w-44 rounded-md border shadow-xl py-1 max-h-64 overflow-y-auto"
+            className="absolute top-full left-0 mt-1 z-20 min-w-52 rounded-md border shadow-xl py-1 max-h-64 overflow-y-auto"
             style={{ background: 'var(--bg-2)', borderColor: 'var(--border)' }}
           >
-            {options.map(opt => (
+            {sorted.map(opt => (
               <label
                 key={opt}
                 className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-3)] text-xs"
@@ -76,7 +86,12 @@ function MultiSelect({
                   onChange={() => toggle(opt)}
                   className="accent-[var(--accent)] w-3 h-3"
                 />
-                {labelMap?.[opt] ?? opt}
+                <span className="flex-1">{labelMap?.[opt] ?? opt}</span>
+                {counts && counts[opt] !== undefined && (
+                  <span className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                    {counts[opt].toLocaleString()}
+                  </span>
+                )}
               </label>
             ))}
           </div>
@@ -158,10 +173,28 @@ function RangeFilter({
 
 export default function FilterPanel({ filters, onChange, rules }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
+  const [keywordCounts, setKeywordCounts] = useState<Record<string, number>>({})
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     fetchKeywords().then(setKeywords)
   }, [])
+
+  // Re-fetch keyword counts when non-keyword filters change (debounced 400ms)
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      fetchKeywordCounts(filters).then(setKeywordCounts)
+    }, 400)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [
+    filters.date_from, filters.date_to,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(filters.sources),
+    JSON.stringify(filters.categories),
+    JSON.stringify(filters.intensities),
+    filters.confidence_min, filters.confidence_max,
+  ])
 
   const categoryOptions = rules.map(r => r.name)
   const categoryLabelMap = Object.fromEntries(
@@ -235,6 +268,7 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         options={keywords}
         selected={filters.keywords}
         onChange={v => onChange({ keywords: v })}
+        counts={keywordCounts}
       />
       <MultiSelect
         label="Intensity"

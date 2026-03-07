@@ -459,6 +459,63 @@ async def get_keywords():
     return {"keywords": [r["canonical_name"] for r in rows]}
 
 
+@router.get("/keywords/counts")
+async def get_keyword_counts(
+    request: Request,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sources: list[str] = Query(default=[]),
+    categories: list[str] = Query(default=[]),
+    intensities: list[int] = Query(default=[]),
+    confidence_min: float | None = Query(None, ge=0.0, le=1.0),
+    confidence_max: float | None = Query(None, ge=0.0, le=1.0),
+):
+    """Return keyword signal counts respecting current filters (excluding keyword filter itself).
+    Used to show live counts in the keyword multiselect dropdown.
+    """
+    cache = request.app.state.cache
+    cache_key = dict(
+        date_from=date_from, date_to=date_to, sources=sorted(sources),
+        categories=sorted(categories), intensities=sorted(intensities),
+        confidence_min=confidence_min, confidence_max=confidence_max,
+    )
+    cached = cache.get("keyword_counts", cache_key)
+    if cached is not None:
+        return cached
+
+    where, params = _build_where(
+        date_from, date_to, sources, intensities,
+        confidence_min, confidence_max, keywords=[],
+    )
+
+    # Add category filter directly in SQL via jsonb matched_rules check
+    if categories:
+        where += (
+            " AND EXISTS ("
+            "  SELECT 1 FROM jsonb_array_elements(p.matched_rules) AS mr"
+            "  WHERE mr->>'rule_name' = ANY(%s)"
+            ")"
+        )
+        params = params + [categories]
+
+    rows = fetchall(
+        f"""
+        SELECT kw, COUNT(*) AS count
+        FROM processed_signals p
+        JOIN raw_signals r ON r.id = p.raw_signal_id
+        JOIN LATERAL unnest(p.keywords_matched) AS kw ON true
+        WHERE {where}
+        GROUP BY kw
+        ORDER BY count DESC
+        """,
+        params,
+    )
+
+    result = {"counts": [{"name": r["kw"], "count": r["count"]} for r in rows]}
+    cache.set("keyword_counts", cache_key, value=result, ttl=120)
+    return result
+
+
 @router.get("/rules")
 async def get_rules():
     """Return extraction rules from config (categories used for signal classification)."""
