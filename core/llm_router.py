@@ -69,17 +69,55 @@ class LLMRouter:
         Route call to provider, execute, log usage, return response text.
         Raises RuntimeError on provider misconfiguration.
         """
-        provider = self._routing.get(call.operation, "local")
+        import time
 
-        if provider == "claude":
-            return self._call_anthropic(call)
-        elif provider == "local":
-            return self._call_local(call)
-        else:
-            raise RuntimeError(
-                f"Unknown provider '{provider}' for operation '{call.operation}'. "
-                f"Check llm_routing in config.json."
-            )
+        provider = self._routing.get(call.operation, "local")
+        t0 = time.perf_counter()
+        try:
+            if provider == "claude":
+                text = self._call_anthropic(call)
+            elif provider == "local":
+                text = self._call_local(call)
+            else:
+                raise RuntimeError(
+                    f"Unknown provider '{provider}' for operation '{call.operation}'. "
+                    f"Check llm_routing in config.json."
+                )
+        except Exception as e:
+            elapsed = time.perf_counter() - t0
+            self._log_llm_io(call, provider, None, str(e), elapsed)
+            raise
+        elapsed = time.perf_counter() - t0
+        self._log_llm_io(call, provider, text, None, elapsed)
+        return text
+
+    def _log_llm_io(
+        self,
+        call: LLMCall,
+        provider: str,
+        response: str | None,
+        error: str | None,
+        elapsed_seconds: float,
+    ) -> None:
+        """Log every LLM request/response so workers can be debugged."""
+        max_msg = 400
+        parts = []
+        for m in call.messages:
+            role = m.get("role", "?")
+            content = (m.get("content") or "")[:max_msg]
+            if len((m.get("content") or "")) > max_msg:
+                content += "..."
+            parts.append(f"[{role}]: {content!r}")
+        request_summary = " | ".join(parts)
+        resp_summary = (response[:max_msg] + "..." if response and len(response) > max_msg else response) if response else error
+        log.warning(
+            "[LLM] op=%s provider=%s elapsed=%.2fs req=%s resp=%s",
+            call.operation,
+            provider,
+            elapsed_seconds,
+            request_summary,
+            resp_summary,
+        )
 
     def get_tokenizer(self):
         """
