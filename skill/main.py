@@ -204,6 +204,13 @@ def cmd_run_collect_worker(json_str: str = "{}") -> None:
     from core.orchestrator import Orchestrator  # noqa: PLC0415
 
     config = _load_config()
+
+    # Pause guard: set config.workers_paused = true to halt all collection/LLM
+    # workers during reclassification or maintenance without removing cron jobs.
+    if config.get("workers_paused", False):
+        _out({"status": "paused", "note": "Collection paused (workers_paused=true in config)."})
+        return
+
     storage = _make_storage()
 
     stale = storage.get_stale_keywords(min_age_hours=24, limit=1)
@@ -445,6 +452,13 @@ def cmd_run_worker(json_str: str = "{}") -> None:
     from core.translate_worker import TranslateWorker  # noqa: PLC0415
 
     config = _load_config()
+
+    # Pause guard: set config.workers_paused = true to halt all collection/LLM
+    # workers during reclassification or maintenance without removing cron jobs.
+    if config.get("workers_paused", False):
+        _out({"status": "paused", "note": "LLM worker paused (workers_paused=true in config)."})
+        return
+
     storage = _make_storage()
 
     llm_result = LLMWorker(config, storage).run_loop()
@@ -905,6 +919,39 @@ def cmd_approve_report_template(json_str: str = "") -> None:
     })
 
 
+def cmd_set_workers_paused(json_str: str) -> None:
+    """
+    Pause or resume collect + LLM workers without removing cron jobs.
+    json_str: '{"paused": true}' or '{"paused": false}'
+
+    When paused=true:
+      - run_collect_worker returns immediately (no collection)
+      - run_worker returns immediately (no LLM tasks, no translation)
+      - run_embed_worker continues normally (used for reclassification)
+    """
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        _err(f"Invalid JSON: {e}")
+        return
+
+    paused = bool(data.get("paused", True))
+    cfg_mgr = _make_config_manager()
+    cfg_mgr.set_nested(["workers_paused"], paused)
+
+    status = "paused" if paused else "resumed"
+    _out({
+        "status": "ok",
+        "workers_paused": paused,
+        "note": (
+            f"Collection and LLM workers are now {status}. "
+            f"Embed worker (reclassifier) continues normally."
+            if paused else
+            f"All workers resumed. Collection and LLM processing will restart on next cron tick."
+        ),
+    })
+
+
 def cmd_list_keywords() -> None:
     """List all tracked keywords."""
     storage = _make_storage()
@@ -1014,6 +1061,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "generate_change_report":   (cmd_generate_change_report, True),
     "preview_change_report":    (cmd_preview_change_report, True),
     "approve_report_template":  (cmd_approve_report_template, False),
+    "set_workers_paused":       (cmd_set_workers_paused, True),
     "list_keywords":            (cmd_list_keywords, False),
     "embedder_service":         (cmd_embedder_service, True),
 }
