@@ -72,7 +72,6 @@ function PipelineArrow() {
 
 interface PipelineStageClassifyProps {
   index: number
-  processedTotal: number
   rawTotal: number
   classifiedByEmbeddings: number
   classifiedByLlm: number
@@ -82,7 +81,6 @@ interface PipelineStageClassifyProps {
 
 function PipelineStageClassify({
   index,
-  processedTotal,
   rawTotal,
   classifiedByEmbeddings,
   classifiedByLlm,
@@ -108,7 +106,7 @@ function PipelineStageClassify({
         </span>
       </div>
       <div className="text-base font-semibold tabular-nums leading-tight" style={{ color: 'var(--text)' }}>
-        {processedTotal.toLocaleString()} / {rawTotal.toLocaleString()}
+        {(classifiedByEmbeddings + classifiedByLlm).toLocaleString()} / {rawTotal.toLocaleString()}
       </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-2xs" style={{ color: 'var(--text-muted)' }}>
         <div>embeddings: {classifiedByEmbeddings.toLocaleString()}</div>
@@ -198,7 +196,6 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
           <PipelineArrow />
           <PipelineStageClassify
             index={3}
-            processedTotal={stats.processed_total ?? 0}
             rawTotal={stats.raw_total ?? 0}
             classifiedByEmbeddings={stats.classified_by_embeddings ?? 0}
             classifiedByLlm={stats.classified_by_llm ?? 0}
@@ -219,10 +216,10 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
           <PipelineStage
             index={5}
             label="Vectorize"
-            value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${((stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0)).toLocaleString()}`}
+            value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)).toLocaleString()}`}
             sub="в Qdrant"
-            pct={(stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0) > 0
-              ? (stats.embedded_total / ((stats.embedded_total ?? 0) + (stats.pending_embeddings ?? 0))) * 100
+            pct={((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0)) > 0
+              ? ((stats.embedded_total ?? 0) / ((stats.summarized_total ?? 0) + (stats.summary_pending ?? 0))) * 100
               : 0}
           />
         </div>
