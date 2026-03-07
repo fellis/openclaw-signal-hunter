@@ -85,6 +85,7 @@ class ProcessedSignal:
     rank_score: float
     linked_group_id: str | None = None
     processed_at: datetime | None = None
+    borderline_override_pending: bool = False
 
 
 @dataclass

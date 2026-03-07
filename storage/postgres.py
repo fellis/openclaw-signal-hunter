@@ -249,18 +249,19 @@ class PostgresStorage:
                     INSERT INTO processed_signals
                         (raw_signal_id, dedup_key, is_relevant, matched_rules, summary,
                          products_mentioned, intensity, confidence, keywords_matched,
-                         language, rank_score, linked_group_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         language, rank_score, linked_group_id, borderline_override_pending)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (dedup_key) DO UPDATE SET
-                        is_relevant      = EXCLUDED.is_relevant,
-                        matched_rules    = EXCLUDED.matched_rules,
-                        summary          = EXCLUDED.summary,
-                        products_mentioned = EXCLUDED.products_mentioned,
-                        intensity        = EXCLUDED.intensity,
-                        confidence       = EXCLUDED.confidence,
-                        keywords_matched = EXCLUDED.keywords_matched,
-                        language         = EXCLUDED.language,
-                        rank_score       = EXCLUDED.rank_score
+                        is_relevant                  = EXCLUDED.is_relevant,
+                        matched_rules                = EXCLUDED.matched_rules,
+                        summary                      = EXCLUDED.summary,
+                        products_mentioned           = EXCLUDED.products_mentioned,
+                        intensity                    = EXCLUDED.intensity,
+                        confidence                   = EXCLUDED.confidence,
+                        keywords_matched             = EXCLUDED.keywords_matched,
+                        language                     = EXCLUDED.language,
+                        rank_score                   = EXCLUDED.rank_score,
+                        borderline_override_pending  = EXCLUDED.borderline_override_pending
                     """,
                     (
                         ps.raw_signal_id,
@@ -275,6 +276,7 @@ class PostgresStorage:
                         ps.language,
                         ps.rank_score,
                         ps.linked_group_id,
+                        ps.borderline_override_pending,
                     ),
                 )
                 # embedding_queue is populated by update_summary once summary is ready
@@ -350,6 +352,7 @@ class PostgresStorage:
                     JOIN processed_signals p ON p.dedup_key = eq.dedup_key
                     JOIN raw_signals r ON r.id = p.raw_signal_id
                     WHERE eq.status = 'pending'
+                      AND p.borderline_override_pending = false
                     ORDER BY eq.created_at
                     LIMIT %s
                     """,
@@ -377,6 +380,32 @@ class PostgresStorage:
                     WHERE id = %s
                     """,
                     (datetime.now(timezone.utc), queue_id),
+                )
+
+
+    def fetch_raw_signal_by_dedup_key(self, dedup_key: str) -> dict | None:
+        """Fetch a single raw signal by dedup_key for LLM Worker borderline processing."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT id, dedup_key, source, title, body,
+                           score, comments_count, created_at, extra
+                    FROM raw_signals
+                    WHERE dedup_key = %s
+                    """,
+                    (dedup_key,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def clear_borderline_pending(self, dedup_key: str) -> None:
+        """Clear borderline_override_pending flag after LLM decided not relevant."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "UPDATE processed_signals SET borderline_override_pending = false WHERE dedup_key = %s",
+                    (dedup_key,),
                 )
 
     def count_processed(self) -> dict[str, int]:

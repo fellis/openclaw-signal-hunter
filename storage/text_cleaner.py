@@ -69,3 +69,21 @@ def clean_body(text: str) -> str:
     text = _EXCESS_BLANKS.sub("\n\n", text)
 
     return text.strip()
+
+
+_HN_NOISE_PREFIXES = (
+    "Show HN:",
+    "Ask HN:",
+    "Tell HN:",
+    "Launch HN:",
+)
+
+
+def strip_hn_prefix(title: str) -> str:
+    """Remove HN submission prefixes from titles before embedding or LLM prompts."""
+    stripped = title.strip()
+    for prefix in _HN_NOISE_PREFIXES:
+        if stripped.lower().startswith(prefix.lower()):
+            stripped = stripped[len(prefix):].strip()
+            break
+    return stripped

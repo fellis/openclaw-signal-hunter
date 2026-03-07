@@ -28,6 +28,23 @@ def _emit(data: dict[str, Any]) -> None:
     print(json.dumps(data, ensure_ascii=False), flush=True)
 
 
+
+
+def load_rules(config: dict) -> list:
+    """Load ExtractionRule list from config. Used by EmbedWorker and LLM Worker."""
+    from core.models import ExtractionRule  # noqa: PLC0415
+    raw_rules = config.get("extraction_rules", [])
+    return [
+        ExtractionRule(
+            name=r["name"],
+            description=r.get("description", ""),
+            examples=r.get("examples", []),
+            negative_examples=r.get("negative_examples", []),
+            priority=r.get("priority", 1),
+        )
+        for r in raw_rules
+    ]
+
 class Orchestrator:
     """
     Top-level coordinator. All heavy operations delegate to dedicated classes.
