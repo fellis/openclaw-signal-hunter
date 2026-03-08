@@ -59,7 +59,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     <div className="flex flex-col h-full">
       <PageHeader
         title="Signals"
-        subtitle={`${total.toLocaleString()} relevant signals · ${categories.length} categories`}
+        subtitle={`${(stats?.relevant_total ?? total).toLocaleString()} relevant signals · ${categories.length} categories`}
         action={
           <button onClick={load} disabled={loading} className="btn btn-ghost">
             {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
