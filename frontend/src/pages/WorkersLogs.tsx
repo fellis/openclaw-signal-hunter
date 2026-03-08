@@ -3,7 +3,7 @@ import { RefreshCw, Loader2, Trash2, Pause, Play, RotateCw } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import PipelineStrip from '@/components/layout/PipelineStrip'
 import { fetchStats } from '@/api/report'
-import { fetchWorkerStatus, fetchWorkerLogs, restartWorkers } from '@/api/workers'
+import { fetchWorkerStatus, fetchWorkerLogs, clearWorkersLogs, restartWorkers } from '@/api/workers'
 import type { StatsResponse } from '@/types'
 import type { WorkerStatusResponse, WorkerLogLine } from '@/types'
 
@@ -104,10 +104,16 @@ export default function WorkersLogs() {
     }
   }, [lines])
 
-  const handleClear = () => {
-    setLines([])
-    setNextSince(undefined)
+  const handleClear = async () => {
     setError(null)
+    try {
+      await clearWorkersLogs()
+      setLines([])
+      setNextSince(undefined)
+      loadLogs()
+    } catch (e) {
+      setError(String(e))
+    }
   }
 
   const handleRestart = async () => {

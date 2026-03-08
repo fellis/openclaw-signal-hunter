@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -296,21 +297,27 @@ async def get_workers_status(request: Request):
 
 @router.get("/logs")
 async def get_workers_logs(
+    request: Request,
     tail: int = Query(500, ge=1, le=LOG_TAIL_MAX),
     since: float | None = Query(None),
     worker: str = Query("all"),
     level: str = Query("all"),
 ):
-    """Return container logs (parsed). since=unix ts (float) to get only new lines; returned lines are strictly after since to avoid duplicates."""
+    """Return container logs (parsed). since=unix ts for incremental fetch. Server-side clear: only lines after last clear."""
     container_name = os.environ.get("WORKER_CONTAINER_NAME", "signal-hunter-workers")
     lines, next_since = _get_docker_logs(container_name, tail=tail, since=since)
 
+    cleared_at: float | None = getattr(request.app.state, "workers_log_cleared_at", None)
+    if cleared_at is not None:
+        def _after_clear(ln: dict[str, Any]) -> bool:
+            ts_f = _ts_to_float(ln.get("ts") or "")
+            return ts_f is None or ts_f > cleared_at
+        lines = [ln for ln in lines if _after_clear(ln)]
+
     if since is not None:
-        # Exclude lines with timestamp <= since so the same line is not returned again on next poll
         def _after_since(ln: dict[str, Any]) -> bool:
             ts_f = _ts_to_float(ln.get("ts") or "")
             return ts_f is None or ts_f > since
-
         lines = [ln for ln in lines if _after_since(ln)]
 
     # Drop consecutive duplicate runner lines (same JSON status printed every tick floods the UI)
@@ -340,8 +347,9 @@ async def get_workers_logs(
 
 
 @router.post("/logs/clear")
-async def clear_workers_logs_view():
-    """Client-side clear: no-op, returns ok. UI clears local state and refetches with tail only."""
+async def clear_workers_logs_view(request: Request):
+    """Server-side clear: from now on GET /logs returns only lines after this moment."""
+    request.app.state.workers_log_cleared_at = time.time()
     return {"status": "ok"}
 
 

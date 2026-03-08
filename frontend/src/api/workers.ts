@@ -31,6 +31,12 @@ export async function fetchWorkerLogs(params: FetchWorkerLogsParams = {}): Promi
   return res.json()
 }
 
+export async function clearWorkersLogs(): Promise<{ status: string }> {
+  const res = await fetch('/api/workers/logs/clear', { method: 'POST' })
+  if (!res.ok) throw new Error(`Clear logs failed: ${res.status}`)
+  return res.json()
+}
+
 export async function restartWorkers(): Promise<{ status: string; message?: string }> {
   const res = await fetch('/api/workers/restart', { method: 'POST' })
   if (!res.ok) {
