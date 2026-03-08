@@ -1,25 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Loader2 } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import PipelineStrip from '@/components/layout/PipelineStrip'
 import FilterPanel from '@/components/report/FilterPanel'
 import SignalTable from '@/components/report/SignalTable'
 import { fetchReport, fetchStats, fetchRules } from '@/api/report'
+import { filtersFromSearchParams, filtersToSearchParams } from '@/lib/urlParams'
 import type { Category, Filters, Rule, StatsResponse } from '@/types'
 
-const DEFAULT_FILTERS: Filters = {
-  date_from: '',
-  date_to: '',
-  sources: [],
-  categories: [],
-  keywords: [],
-  intensities: [],
-  confidence_min: null,
-  confidence_max: null,
-}
-
 export default function Report({ lang = 'en' }: { lang?: string }) {
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const filters = filtersFromSearchParams(searchParams)
+
   const [categories, setCategories] = useState<Category[]>([])
   const [rules, setRules] = useState<Rule[]>([])
   const [total, setTotal] = useState(0)
@@ -50,8 +43,17 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     fetchRules().then(setRules).catch(() => {})
   }, [])
 
-  const updateFilters = (partial: Partial<Filters>) =>
-    setFilters(prev => ({ ...prev, ...partial }))
+  const FILTER_KEYS = ['date_from', 'date_to', 'sources', 'categories', 'keywords', 'intensities', 'confidence_min', 'confidence_max']
+
+  const updateFilters = useCallback((partial: Partial<Filters>) => {
+    const next = { ...filters, ...partial }
+    setSearchParams(prev => {
+      const nextParams = new URLSearchParams(prev)
+      FILTER_KEYS.forEach(k => nextParams.delete(k))
+      filtersToSearchParams(next).forEach((v, k) => nextParams.set(k, v))
+      return nextParams
+    }, { replace: true })
+  }, [filters, setSearchParams])
 
   return (
     <div className="flex flex-col h-full">

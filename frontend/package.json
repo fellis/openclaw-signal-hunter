@@ -9,12 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/react-table": "^8.20.5",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.471.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "@tanstack/react-table": "^8.20.5",
-    "recharts": "^2.13.3",
-    "lucide-react": "^0.471.0",
-    "clsx": "^2.1.1"
+    "react-router-dom": "^7.13.1",
+    "recharts": "^2.13.3"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",

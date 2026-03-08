@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Loader2, Trash2, Pause, Play, RotateCw } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import PipelineStrip from '@/components/layout/PipelineStrip'
@@ -17,14 +18,34 @@ function formatInterval(sec: number): string {
 }
 
 export default function WorkersLogs() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const workerFilter = searchParams.get('worker') ?? 'all'
+  const levelFilter = searchParams.get('level') ?? 'all'
+
   const [stats, setStats] = useState<StatsResponse | null>(null)
   const [totalSignals, setTotalSignals] = useState(0)
   const [status, setStatus] = useState<WorkerStatusResponse | null>(null)
   const [lines, setLines] = useState<WorkerLogLine[]>([])
   const [nextSince, setNextSince] = useState<number | undefined>(undefined)
-  const [workerFilter, setWorkerFilter] = useState('all')
-  const [levelFilter, setLevelFilter] = useState('all')
   const [paused, setPaused] = useState(false)
+
+  const setWorkerFilter = useCallback((v: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (v === 'all') next.delete('worker')
+      else next.set('worker', v)
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
+  const setLevelFilter = useCallback((v: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (v === 'all') next.delete('level')
+      else next.set('level', v)
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
   const [loading, setLoading] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [error, setError] = useState<string | null>(null)

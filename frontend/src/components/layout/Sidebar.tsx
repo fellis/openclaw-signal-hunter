@@ -1,10 +1,11 @@
+import { NavLink } from 'react-router-dom'
 import { BarChart2, Search, Zap, Moon, Sun, ScrollText } from 'lucide-react'
-import type { Page, Lang } from '@/App'
+import type { Lang } from '@/App'
+import { PAGE_PATHS, type Page } from '@/lib/urlParams'
 import { cn } from '@/lib/utils'
 
 interface Props {
   page: Page
-  setPage: (p: Page) => void
   dark: boolean
   setDark: (d: boolean) => void
   lang: Lang
@@ -12,13 +13,13 @@ interface Props {
 }
 
 const NAV = [
-  { id: 'report' as Page, icon: Zap, label: 'Signals' },
-  { id: 'charts' as Page, icon: BarChart2, label: 'Charts' },
-  { id: 'search' as Page, icon: Search, label: 'Search' },
-  { id: 'logs' as Page, icon: ScrollText, label: 'Logs' },
+  { id: 'report' as Page, path: PAGE_PATHS.report, icon: Zap, label: 'Signals' },
+  { id: 'charts' as Page, path: PAGE_PATHS.charts, icon: BarChart2, label: 'Charts' },
+  { id: 'search' as Page, path: PAGE_PATHS.search, icon: Search, label: 'Search' },
+  { id: 'logs' as Page, path: PAGE_PATHS.logs, icon: ScrollText, label: 'Logs' },
 ]
 
-export default function Sidebar({ page, setPage, dark, setDark, lang, setLang }: Props) {
+export default function Sidebar({ page, dark, setDark, lang, setLang }: Props) {
   return (
     <aside
       className="flex flex-col w-14 shrink-0 border-r"
@@ -31,23 +32,23 @@ export default function Sidebar({ page, setPage, dark, setDark, lang, setLang }:
         </div>
       </div>
 
-      {/* Nav */}
+      {/* Nav - use NavLink to preserve search params (e.g. lang) */}
       <nav className="flex-1 flex flex-col items-center gap-1 py-3">
-        {NAV.map(({ id, icon: Icon, label }) => (
-          <button
+        {NAV.map(({ id, path, icon: Icon, label }) => (
+          <NavLink
             key={id}
-            onClick={() => setPage(id)}
+            to={path}
             title={label}
-            className={cn(
-              'w-9 h-9 rounded-md flex items-center justify-center transition-colors',
-              page === id
-                ? 'text-white'
-                : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text)]',
-            )}
-            style={page === id ? { background: 'var(--accent)' } : {}}
+            className={({ isActive }) =>
+              cn(
+                'w-9 h-9 rounded-md flex items-center justify-center transition-colors',
+                isActive ? 'text-white' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text)]',
+              )
+            }
+            style={({ isActive }) => (isActive ? { background: 'var(--accent)' } : {})}
           >
             <Icon size={16} />
-          </button>
+          </NavLink>
         ))}
       </nav>
 

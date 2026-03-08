@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Search as SearchIcon, Loader2, ExternalLink, Zap, AlignLeft } from 'lucide-react'
 import { semanticSearch, textSearch } from '@/api/search'
 import type { SearchResult } from '@/types'
@@ -77,16 +78,37 @@ function ResultRow({ result, mode }: { result: SearchResult; mode: Mode }) {
 }
 
 export default function Search({ lang = 'en' }: { lang?: string }) {
-  const [query, setQuery] = useState('')
-  const [mode, setMode] = useState<Mode>('semantic')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const qFromUrl = searchParams.get('q') ?? ''
+  const modeFromUrl = (searchParams.get('mode') === 'text' ? 'text' : 'semantic') as Mode
+
+  const [query, setQuery] = useState(qFromUrl)
+  const [mode, setMode] = useState<Mode>(modeFromUrl)
   const [results, setResults] = useState<SearchResult[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
 
+  useEffect(() => {
+    setQuery(qFromUrl)
+    setMode(modeFromUrl)
+  }, [qFromUrl, modeFromUrl])
+
+  const updateUrl = useCallback((q: string, m: Mode) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (q.trim()) next.set('q', q.trim())
+      else next.delete('q')
+      if (m === 'text') next.set('mode', 'text')
+      else next.delete('mode')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
   const search = useCallback(async () => {
     if (!query.trim()) return
+    updateUrl(query, mode)
     setLoading(true)
     setError(null)
     setSearched(true)
@@ -102,7 +124,7 @@ export default function Search({ lang = 'en' }: { lang?: string }) {
     } finally {
       setLoading(false)
     }
-  }, [query, mode, lang])
+  }, [query, mode, lang, updateUrl])
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') search()
@@ -118,7 +140,7 @@ export default function Search({ lang = 'en' }: { lang?: string }) {
         <div className="flex items-center gap-2">
           <div className="flex rounded-md border overflow-hidden shrink-0" style={{ borderColor: 'var(--border)' }}>
             <button
-              onClick={() => setMode('semantic')}
+              onClick={() => { setMode('semantic'); updateUrl(query, 'semantic') }}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors',
                 mode === 'semantic' ? 'text-white' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]',
@@ -129,7 +151,7 @@ export default function Search({ lang = 'en' }: { lang?: string }) {
               Semantic
             </button>
             <button
-              onClick={() => setMode('text')}
+              onClick={() => { setMode('text'); updateUrl(query, 'text') }}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-l',
                 mode === 'text' ? 'text-white' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]',

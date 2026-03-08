@@ -1,19 +1,36 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom'
 import Sidebar from '@/components/layout/Sidebar'
 import Report from '@/pages/Report'
 import Charts from '@/pages/Charts'
 import Search from '@/pages/Search'
 import WorkersLogs from '@/pages/WorkersLogs'
+import { pageFromPath, PAGE_PATHS } from '@/lib/urlParams'
 
-export type Page = 'report' | 'charts' | 'search' | 'logs'
 export type Lang = 'en' | 'ru'
 
-export default function App() {
-  const [page, setPage] = useState<Page>('report')
-  const [lang, setLang] = useState<Lang>(() =>
-    (localStorage.getItem('lang') as Lang) || 'en'
-  )
-  const [dark, setDark] = useState(() => {
+function useLangFromUrl(): [Lang, (l: Lang) => void] {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const lang = (searchParams.get('lang') === 'ru' ? 'ru' : 'en') as Lang
+
+  useEffect(() => {
+    localStorage.setItem('lang', lang)
+  }, [lang])
+
+  const setLang = (l: Lang) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (l === 'en') next.delete('lang')
+      else next.set('lang', l)
+      return next
+    })
+  }
+
+  return [lang, setLang]
+}
+
+function useTheme() {
+  const [dark, setDarkState] = useState(() => {
     const stored = localStorage.getItem('theme')
     return stored ? stored === 'dark' : true
   })
@@ -23,18 +40,27 @@ export default function App() {
     localStorage.setItem('theme', dark ? 'dark' : 'light')
   }, [dark])
 
-  useEffect(() => {
-    localStorage.setItem('lang', lang)
-  }, [lang])
+  return [dark, setDarkState] as const
+}
+
+export default function App() {
+  const location = useLocation()
+  const page = pageFromPath(location.pathname)
+  const [lang, setLang] = useLangFromUrl()
+  const [dark, setDark] = useTheme()
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
-      <Sidebar page={page} setPage={setPage} dark={dark} setDark={setDark} lang={lang} setLang={setLang} />
+      <Sidebar page={page} dark={dark} setDark={setDark} lang={lang} setLang={setLang} />
       <main className="flex-1 overflow-auto">
-        {page === 'report' && <Report lang={lang} />}
-        {page === 'charts' && <Charts />}
-        {page === 'search' && <Search lang={lang} />}
-        {page === 'logs' && <WorkersLogs />}
+        <Routes>
+          <Route path={PAGE_PATHS.report} element={<Report lang={lang} />} />
+          <Route path={PAGE_PATHS.charts} element={<Charts />} />
+          <Route path={PAGE_PATHS.search} element={<Search lang={lang} />} />
+          <Route path={PAGE_PATHS.logs} element={<WorkersLogs />} />
+          <Route path="/" element={<Navigate to={PAGE_PATHS.report} replace />} />
+          <Route path="*" element={<Navigate to={PAGE_PATHS.report} replace />} />
+        </Routes>
       </main>
     </div>
   )
