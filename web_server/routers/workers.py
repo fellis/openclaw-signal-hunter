@@ -65,6 +65,7 @@ def _get_docker_logs(
     """Fetch container logs via Docker SDK. Returns (parsed_lines, next_since_unix)."""
     try:
         import docker
+        from docker.errors import NotFound
     except ImportError:
         log.warning("docker SDK not installed")
         return [], None
@@ -76,7 +77,21 @@ def _get_docker_logs(
 
     try:
         client = docker.DockerClient(base_url=f"unix://{socket_path}")
-        container = client.containers.get(container_name)
+        container = None
+        if container_name:
+            try:
+                container = client.containers.get(container_name)
+            except NotFound:
+                pass
+        if container is None:
+            # Find by Compose service label (works when project prefix changes container name)
+            for c in client.containers.list():
+                if c.labels.get("com.docker.compose.service") == "signal-hunter-workers":
+                    container = c
+                    break
+        if container is None:
+            log.warning("Worker container not found (name=%r, no label match)", container_name)
+            return [], None
     except Exception as e:
         log.warning("Docker container %s: %s", container_name, e)
         return [], None
