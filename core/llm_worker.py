@@ -364,6 +364,8 @@ class LLMWorker:
             temperature=temperature,
         )
         raw_response = router.complete(call).strip()
+        if raw_response.startswith("```"):
+            raw_response = raw_response.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
         try:
             parsed_list = json.loads(raw_response)
