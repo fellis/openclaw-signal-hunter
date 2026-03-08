@@ -410,7 +410,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         properties: {
           operation: {
             type: 'string',
-            description: 'Operation: borderline_relevance | summarize_batch | resolve_enrich | resolve_strategy | query',
+            description: 'Operation: borderline_relevance | summarize_batch | resolve_enrich | query',
           },
           provider: { type: 'string', description: 'Provider: local | claude' },
         },

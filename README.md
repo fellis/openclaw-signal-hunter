@@ -15,7 +15,7 @@ You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
 7. **Generates change reports** - weekly/monthly deltas with what's new and what grew
-8. **Web report UI** - browse signals by category, cluster, and individual posts at port 8080. Supports semantic and full-text search, date/source/intensity filters, and EN/RU language toggle
+8. **Web report UI** - browse signals by category, cluster, and individual posts at port 8080. Semantic and full-text search live in the Report filter bar (no separate Search page). Date/source/intensity filters and EN/RU language toggle
 
 Everything runs on a VPS, fully offline (except for API calls to data sources and the LLM providers you configure).
 
@@ -34,8 +34,8 @@ Everything runs on a VPS, fully offline (except for API calls to data sources an
 | **Local LLM** | Summary generation, rule suggestions, keyword enrichment (OpenAI-compatible endpoint) |
 | **Claude (Anthropic)** | Queries, resolution strategy (configurable) |
 | **MADLAD-400-3B** | Multilingual machine translation (CTranslate2, INT8). Translates signal titles and summaries to Russian. Runs as a separate FastAPI service, accessed via `llm-api` proxy |
-| **Web Report** | React + Vite SPA served by FastAPI on port 8080. Three-level drill-down: categories → clusters → signals. Semantic and full-text search, EN/RU language toggle |
-| **Docker Compose** | PostgreSQL + Qdrant + Embedder (classify) + Embedder-Vectorizer (upsert) + Web Report |
+| **Web Report** | React + Vite SPA served by FastAPI on port 8080. Three-level drill-down: categories → clusters → signals. Search (semantic/text) in Report filter bar; EN/RU toggle |
+| **Docker Compose** | PostgreSQL + Qdrant + Embedder (classify) + Embedder-Vectorizer (upsert) + Web Report + signal-hunter-workers (runner) |
 
 ---
 
@@ -75,14 +75,14 @@ skill/main.py         ← CLI dispatcher
      │   ├── app.py              ← application entry point
      │   ├── db.py               ← psycopg2 helpers
      │   ├── routers/
-     │   │   ├── report.py       ← /api/report, /api/report/clusters, /api/report/signals
-     │   │   └── search.py       ← /api/search/semantic, /api/search/text
+     │   │   ├── report.py       ← /api/report, /api/report/clusters, /api/report/signals (optional q, search_mode)
+     │   │   └── search.py       ← get_search_result_ids() used by report; /api/search/semantic, /api/search/text
      │   └── services/
      │       └── clustering.py   ← HDBSCAN/KMeans cluster strategies
      │
      ├── frontend/               ← React + Vite SPA (built into Dockerfile.web)
      │   └── src/
-     │       ├── pages/          ← Report, Charts, Search
+     │       ├── pages/          ← Report, Charts, WorkersLogs (search is a filter on Report)
      │       ├── components/     ← SignalTable (3-level drill-down), FilterPanel, ...
      │       └── api/            ← fetch helpers (report.ts, search.ts)
      │
@@ -97,7 +97,8 @@ Docker Compose services:
      ├── embedder:6335               ← FastAPI + bge-m3, used by classifier + query
      ├── embedder-vectorizer:6336    ← same image, dedicated to Qdrant upserts (outbox)
      │     embedder_service.py ← /embed (batch) + /embed-query + /health
-     └── web-report:8080             ← FastAPI + React UI (Dockerfile.web)
+     ├── web-report:8080             ← FastAPI + React UI (Dockerfile.web)
+     └── signal-hunter-workers       ← worker runner (embed, LLM, collect, auto-embed)
 
 External services (not in docker-compose):
      └── MADLAD-400-3B translator    ← CTranslate2 INT8 on a separate GPU server
@@ -108,7 +109,7 @@ External services (not in docker-compose):
 - Each collector is a self-contained module implementing `BaseCollector`
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
-- **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > borderline_relevance(70) > summarize_batch(90)
+- **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > borderline_relevance(70) > summarize_batch(90). The LLM router retries up to 3 times on transient network errors (DNS, connection reset, server disconnect) with backoff before failing a task.
 - **Worker runner (one process):** Embed Worker (every minute), LLM Worker (every minute), Collect Worker (every 5 min), Auto Embed (every minute) run from a single container/script. Embed Worker classifies via embeddings (domain pre-filter, borderline enqueued for LLM); LLM Worker handles resolve + borderline_relevance + summarize + translate; Auto Embed vectorizes into Qdrant via `embedder-vectorizer:6336`
 - **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
 - **Daily collection per keyword:** Collect Worker locks each keyword with `last_collected_at = now()` before collecting; re-triggers only after 24h; stalest keywords first
@@ -196,12 +197,13 @@ cp config.example.json config.json
 docker compose up -d
 ```
 
-This starts five services:
+This starts six services:
 - **PostgreSQL 16** (port 5433) - schema applied automatically on first start
 - **Qdrant** (port 6333) - vector storage, data persisted in `qdrantdata` volume
 - **Embedder** (port 6335) - FastAPI + bge-m3; used by Embed Worker (classification) and semantic query. Downloads model on first start (~570MB, cached in `hf_cache` volume)
 - **Embedder-Vectorizer** (port 6336) - same image, dedicated to Auto Embed (Qdrant upserts). Shares `hf_cache` volume - no re-download
 - **Web Report** (port 8080) - React + FastAPI; serves the web UI and `/api/*` endpoints
+- **signal-hunter-workers** - single runner process: embed worker, LLM worker, collect worker, auto-embed (lock file prevents duplicates). Uses explicit DNS (8.8.8.8, 1.1.1.1) for reliable resolution when calling the local LLM or translator.
 
 Check all services are ready:
 
@@ -236,6 +238,10 @@ Add to your `~/.openclaw/openclaw.json` under `plugins`:
 ```
 
 Reload OpenClaw. The plugin registers 25 tools and the `/sh` slash command.
+
+### 7. Deploy to production (optional)
+
+For VPS deployment (OVH or similar): see `docs/deploy-vps.md`. Typical flow: `git pull`, `docker compose build web-report` (when frontend or backend changed), `docker compose up -d web-report` (and optionally `signal-hunter-workers`). No search result cache; report/clusters run search on each request when `q` is set.
 
 ---
 
@@ -284,7 +290,7 @@ ClawBot:
 Provider | Type           | Model             | Operations
 ---------|----------------|-------------------|---------------------------
 local    | openai_compat  | devstral          | borderline_relevance, summarize_batch, resolve_enrich
-claude   | anthropic      | claude-haiku-4-5  | resolve_strategy, query
+claude   | anthropic      | claude-haiku-4-5  | query
 ```
 
 To route an operation to a different provider:
@@ -487,9 +493,9 @@ http://your-vps:8080
 
 The UI has three main sections:
 
-- **Report** - three-level signal browser: categories (top-level themes) → clusters (signal groups within a category) → individual signals with title, summary, source, date, intensity. Signals load on demand as you expand categories/clusters.
+- **Report** - three-level signal browser: categories → clusters → individual signals (title, summary, source, date, intensity). Signals load on demand when you expand. **Search** is built in: in the filter bar choose Semantic or Text, enter a query (min 2 chars), run on Enter or blur; results keep the same category/cluster structure. Filters: date range, source, category, keyword, intensity, confidence. Old `/search` URLs redirect to Report with the query.
 - **Charts** - timeline and breakdown visualizations.
-- **Search** - semantic search (via Qdrant) and full-text search (PostgreSQL), with filters by source, date range, and intensity.
+- **Workers Logs** - view and clear worker runner logs; restart workers.
 
 **Language toggle (EN / RU):** Switch between English (original content) and Russian (machine-translated by MADLAD-400-3B). The toggle is in the sidebar. The selected language is persisted across sessions. Signals that have been translated show the language badge in the title row. Untranslated signals (translation still pending or worker not configured) fall back to the original English.
 
@@ -510,7 +516,10 @@ Workers run from a single process (container `signal-hunter-workers` or script `
 
 LLM Worker task priorities (sequential, one at a time):
 - `resolve` (priority 50) - keyword enrichment + auto-approved collection plan
+- `borderline_relevance` (priority 70) - LLM relevance decision for borderline signals (hybrid mode)
 - `summarize_batch` (priority 90) - generate summaries for classified signals (auto-enqueued)
+
+If a task is stuck in `running` for more than 1 minute (e.g. previous tick died mid-call), the next tick resets it to pending. If another tick is still processing, this tick skips (info log); waiting a minute for the next tick is normal.
 
 After the LLM task queue is drained each tick, `TranslateWorker.run()` is called automatically - one batch of 32 embedded signals (with summary, not yet translated to `TARGET_LANG`) is sent to the MADLAD-400 service. Results are stored in `signal_translations`.
 
@@ -674,7 +683,6 @@ Key sections:
     "borderline_relevance": "local",
     "summarize_batch":      "local",
     "resolve_enrich":       "local",
-    "resolve_strategy":     "claude",
     "query":                "claude"
   },
   "change_report": {
@@ -758,7 +766,7 @@ PostgreSQL tables:
 | `keyword_profiles` | Discovered + enriched keyword metadata (`last_collected_at` tracks daily collect) |
 | `keyword_collection_plans` | Approved collection plans |
 | `change_report_snapshots` | Saved report history |
-| `llm_task_queue` | LLM task queue: resolve(50) / summarize_batch(90), priority-ordered |
+| `llm_task_queue` | LLM task queue: resolve(50), borderline_relevance(70), summarize_batch(90); priority-ordered |
 | `llm_usage_log` | Token usage and cost per operation |
 | `signal_translations` | Machine-translated titles and summaries per language (signal_id / lang / field / text) |
 
@@ -787,21 +795,21 @@ The `web-report` container exposes a REST API alongside the React SPA:
 GET  /api/stats
      → {total_signals, relevant, embedded, ...}
 
-GET  /api/report/categories?lang=en
-     → [{id, label, signal_count, top_signal}, ...]
+GET  /api/report?lang=en&q=...&search_mode=semantic|text&date_from=...&date_to=...&sources=...&...
+     → {total_signals, categories: [{name, count, rank_score, ...}]}
+     Optional q + search_mode restrict results to search hits (no cached ID list).
 
-GET  /api/report/clusters?category_id=...&lang=en
-     → [{id, label, signal_count, signals:[...]}, ...]
+GET  /api/report/clusters?category=...&lang=en&q=...&search_mode=...&...
+     → {clusters: [{id, name, count, signal_ids, ...}]}
 
-GET  /api/report/signals?cluster_id=...&lang=en&limit=50&offset=0
-     → [{id, title, summary, source, url, rank_score,
-          title_original, summary_original, translation_available}, ...]
+GET  /api/report/signals?ids=...&lang=en&sort_by=...&sort_dir=...
+     → {signals: [{raw_signal_id, title, summary, url, ...}]}
 
 GET  /api/search/semantic?q=...&lang=en&limit=20
 GET  /api/search/text?q=...&lang=en&source=github&limit=20
 ```
 
-All signal-returning endpoints accept `lang` (`en` or `ru`). When `lang=en`, original content is returned unchanged. When `lang=ru`, translated fields from `signal_translations` are substituted; fields with no translation fall back to originals with `translation_available: false`.
+All signal-returning endpoints accept `lang` (`en` or `ru`). When `lang=en`, original content is returned. When `lang=ru`, translated fields from `signal_translations` are used; missing translations fall back to originals with `translation_available: false`.
 
 ---
 
@@ -828,6 +836,14 @@ In Qdrant queries: `combined_score = rank_score * similarity`.
 ### Embedding queue not shrinking
 
 If `embedding_queue` does not shrink: ensure the worker runner container is running (`docker compose ps signal-hunter-workers`) and check its logs (`docker compose logs -f signal-hunter-workers`). The runner calls `embed` every minute; OpenClaw cron is not used for Signal Hunter workers.
+
+### Many borderline_relevance (or other LLM) tasks in `failed`
+
+**Symptom:** Report shows "queue LLM" high and Summarize growing; `llm_task_queue` has many `status=failed` tasks.
+
+**Cause:** Tasks failed after 3 retries (e.g. transient DNS "name resolution", connection reset, or an old code bug). The worker correctly processes only `pending` tasks, so it continues with summarize_batch while borderline tasks sit in `failed`.
+
+**Fix:** Ensure the workers container uses explicit DNS (see `docker-compose.yml`: `dns: 8.8.8.8, 1.1.1.1`) and the code has LLM retry on transient errors (in `core/llm_router.py`). Then run `retry_failed` (chat or `python -m skill retry_failed`) to reset failed tasks to pending. See `docs/causes-failed-borderline-tasks.md` for details.
 
 ### Keyword resolve tasks stuck in `failed` with `Internal Server Error`
 

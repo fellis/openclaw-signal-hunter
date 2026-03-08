@@ -84,7 +84,6 @@
     "borderline_relevance": "local",
     "summarize_batch":      "local",
     "resolve_enrich":       "local",
-    "resolve_strategy":     "claude",
     "query":                "claude"
   },
 

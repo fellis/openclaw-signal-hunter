@@ -401,7 +401,7 @@ def cmd_set_routing(json_str: str) -> None:
 
     operation = data.get("operation", "")
     provider = data.get("provider", "")
-    valid_ops = ["borderline_relevance", "summarize_batch", "resolve_enrich", "resolve_strategy", "query"]
+    valid_ops = ["borderline_relevance", "summarize_batch", "resolve_enrich", "query"]
     valid_providers = ["local", "claude"]
 
     if operation not in valid_ops:
