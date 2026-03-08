@@ -25,9 +25,10 @@ acquire_lock() {
 }
 
 run_tick() {
-  python -m skill run_worker    || true
-  python -m skill run_embed_worker || true
-  python -m skill embed          || true
+  python -m skill run_worker         || true
+  python -m skill run_embed_worker   || true
+  python -m skill embed              || true
+  python -m skill run_translate_worker || true
 }
 
 run_collect_tick() {

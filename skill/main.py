@@ -441,10 +441,9 @@ def cmd_run_worker(json_str: str = "{}") -> None:
       6. Repeat until queue empty or budget exceeded.
 
     NOTE: embedding classification runs in a separate embed worker loop (worker runner;
-    cmd_run_embed_worker). This worker is LLM-only.
+    cmd_run_embed_worker). Translation runs in cmd_run_translate_worker (same interval).
     """
-    from core.llm_worker import LLMWorker        # noqa: PLC0415
-    from core.translate_worker import TranslateWorker  # noqa: PLC0415
+    from core.llm_worker import LLMWorker  # noqa: PLC0415
 
     config = _load_config()
 
@@ -455,16 +454,8 @@ def cmd_run_worker(json_str: str = "{}") -> None:
         return
 
     storage = _make_storage()
-
     llm_result = LLMWorker(config, storage).run_loop()
-
-    # Run one translation batch on the same tick (no separate loop needed).
-    try:
-        tr_result = TranslateWorker(storage).run()
-    except Exception as exc:
-        tr_result = {"status": "error", "error": str(exc)}
-
-    _out({**llm_result, "translation": tr_result})
+    _out(llm_result)
 
 
 def cmd_run_embed_worker(json_str: str = "{}") -> None:
@@ -491,6 +482,26 @@ def cmd_run_embed_worker(json_str: str = "{}") -> None:
     worker = EmbedWorker(config, storage)
     result = worker.run()
     _out({"phase": "process", **result})
+
+
+def cmd_run_translate_worker(json_str: str = "{}") -> None:
+    """
+    Translation worker: one batch of title+summary translations to target language.
+    Called by the worker runner every minute (or manually). Uses TRANSLATOR_URL (separate from LLM).
+    """
+    from core.translate_worker import TranslateWorker  # noqa: PLC0415
+
+    config = _load_config()
+    if config.get("workers_paused", False):
+        _out({"status": "paused", "note": "Translation worker paused (workers_paused=true in config)."})
+        return
+
+    storage = _make_storage()
+    try:
+        result = TranslateWorker(storage).run()
+    except Exception as exc:
+        result = {"status": "error", "error": str(exc)}
+    _out(result)
 
 
 def cmd_queue_resolve(json_str: str) -> None:
@@ -874,6 +885,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_routing":              (cmd_set_routing, True),
     "run_worker":               (cmd_run_worker, False),
     "run_embed_worker":         (cmd_run_embed_worker, False),
+    "run_translate_worker":     (cmd_run_translate_worker, False),
     "queue_resolve":            (cmd_queue_resolve, True),
     "queue_status":             (cmd_queue_status, False),
     "delete_keywords":          (cmd_delete_keywords, True),

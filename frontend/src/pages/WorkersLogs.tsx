@@ -128,6 +128,7 @@ export default function WorkersLogs() {
     'run_embed_worker',
     'run_collect_worker',
     'embed',
+    'run_translate_worker',
     'runner',
     'other',
   ]
@@ -137,6 +138,7 @@ export default function WorkersLogs() {
     run_embed_worker: 'Embed classifier',
     run_collect_worker: 'Collect',
     embed: 'Vectorize',
+    run_translate_worker: 'Translate',
     runner: 'Runner',
     other: 'Other',
   }
@@ -180,7 +182,7 @@ export default function WorkersLogs() {
               Schedule
             </span>
             <span className="text-xs" style={{ color: 'var(--text)' }}>
-              LLM / Embed / Vectorize: {formatInterval(status.schedule.run_worker_interval_sec)} · Collect:{' '}
+              LLM / Embed / Vectorize / Translate: {formatInterval(status.schedule.run_worker_interval_sec)} · Collect:{' '}
               {formatInterval(status.schedule.run_collect_worker_interval_sec)}
             </span>
           </div>
@@ -192,6 +194,7 @@ export default function WorkersLogs() {
             <span>Embed: unprocessed {status.embed_worker.unprocessed} · borderline {status.embed_worker.borderline_pending}</span>
             <span>Collect next: {status.collect_worker.next_keyword ?? '—'}</span>
             <span>Vectorize pending: {status.embed_vectorize.pending}</span>
+            <span>Translate pending: {status.translation_worker?.pending ?? 0}</span>
           </div>
         </div>
       )}
@@ -259,6 +262,16 @@ export default function WorkersLogs() {
           autoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50
         }}
       >
+        {/* Sticky header - same column widths as rows */}
+        <div
+          className="sticky top-0 z-10 flex gap-2 py-1.5 border-b font-semibold shrink-0"
+          style={{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+        >
+          <span className="shrink-0 tabular-nums w-[180px]">Time</span>
+          <span className="shrink-0 uppercase w-14">Level</span>
+          <span className="shrink-0 min-w-[8.5rem]">Worker</span>
+          <span className="min-w-0">Message</span>
+        </div>
         {error && (
           <div className="mb-2 p-2 rounded border text-red-500" style={{ borderColor: '#ef4444', background: '#ef444410' }}>
             {error}
@@ -275,18 +288,16 @@ export default function WorkersLogs() {
             className="flex gap-2 py-0.5 border-b border-transparent hover:bg-[var(--bg-2)]"
             style={{ borderColor: 'var(--border)' }}
           >
-            {ln.ts && (
-              <span className="shrink-0 tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                {ln.ts}
-              </span>
-            )}
+            <span className="shrink-0 tabular-nums w-[180px]" style={{ color: 'var(--text-muted)' }}>
+              {ln.ts || '\u00A0'}
+            </span>
             <span
               className="shrink-0 uppercase font-semibold w-14"
               style={{ color: levelColor[ln.level] ?? 'var(--text-muted)' }}
             >
               {ln.level}
             </span>
-            <span className="shrink-0 w-28 truncate" style={{ color: 'var(--accent)' }}>
+            <span className="shrink-0 min-w-[8.5rem]" style={{ color: 'var(--accent)' }}>
               {WORKER_LABELS[ln.worker] ?? ln.worker}
             </span>
             <span className="min-w-0 break-all">{ln.message}</span>

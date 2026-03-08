@@ -27,7 +27,7 @@ LOGGER_TO_WORKER: dict[str, str] = {
     "skill.main": "runner",
     "core.llm_worker": "run_worker",
     "core.llm_router": "run_worker",
-    "core.translate_worker": "run_worker",
+    "core.translate_worker": "run_translate_worker",
     "core.resolver": "run_worker",
     "core.embed_worker": "run_embed_worker",
     "core.embed_processor": "run_embed_worker",
@@ -41,6 +41,8 @@ LOGGER_TO_WORKER: dict[str, str] = {
     "collectors.reddit": "run_collect_worker",
     "collectors.stackoverflow": "run_collect_worker",
     "collectors.huggingface": "run_collect_worker",
+    "httpx": "run_worker",
+    "httpcore": "run_worker",
 }
 # Fallback for shell lines (e.g. "Worker runner started...")
 RUNNER_WORKER = "runner"
@@ -177,6 +179,7 @@ async def get_workers_status(request: Request):
         "run_embed_worker_interval_sec": worker_interval,
         "run_collect_worker_interval_sec": collect_interval,
         "embed_interval_sec": worker_interval,
+        "run_translate_worker_interval_sec": worker_interval,
     }
 
     # LLM queue
@@ -255,12 +258,34 @@ async def get_workers_status(request: Request):
         embed_worker = {"unprocessed": 0, "borderline_pending": 0}
         embed_vectorize = {"pending": 0}
 
+    # Translation worker: count signals pending translation (same criteria as TranslateWorker._count_pending)
+    target_lang = os.environ.get("TRANSLATE_TARGET_LANG", "ru")
+    trans_row = fetchone(
+        """
+        SELECT COUNT(*) AS pending
+        FROM processed_signals p
+        JOIN raw_signals r ON r.id = p.raw_signal_id
+        JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key
+        WHERE p.is_relevant = true
+          AND p.summary IS NOT NULL
+          AND eq.status = 'done'
+          AND (p.language IS NULL OR p.language != %s)
+          AND NOT EXISTS (
+              SELECT 1 FROM signal_translations st
+              WHERE st.signal_id = r.id AND st.lang = %s
+          )
+        """,
+        (target_lang, target_lang),
+    )
+    translation_worker = {"pending": int(trans_row.get("pending", 0) or 0) if trans_row else 0}
+
     result = {
         "schedule": schedule,
         "llm_queue": llm_queue,
         "embed_worker": embed_worker,
         "collect_worker": collect_worker,
         "embed_vectorize": embed_vectorize,
+        "translation_worker": translation_worker,
     }
     cache.set("workers_status", value=result, ttl=10)
     return result
@@ -298,6 +323,28 @@ async def get_workers_logs(
             prev_msg = None
         deduped.append(ln)
     lines = deduped
+
+    # Refine worker for httpx/httpcore lines by URL (they all map to run_worker otherwise)
+    for ln in lines:
+        if ln.get("worker") != "run_worker":
+            continue
+        msg = (ln.get("message") or "")
+        if "6336" in msg or "vectorizer" in msg:
+            ln["worker"] = "embed"
+        elif "6335" in msg or ("embedder" in msg and "/embed" in msg):
+            ln["worker"] = "run_embed_worker"
+
+    # Runner stdout JSON: assign to LLM or Translate by content (run_worker / run_translate_worker _out())
+    for ln in lines:
+        if ln.get("worker") != RUNNER_WORKER:
+            continue
+        msg = (ln.get("message") or "").strip()
+        if not msg.startswith("{"):
+            continue
+        if '"translated"' in msg and '"rows_stored"' in msg:
+            ln["worker"] = "run_translate_worker"
+        elif '"pending_remaining"' in msg or '"tasks"' in msg:
+            ln["worker"] = "run_worker"
 
     if worker != "all":
         lines = [ln for ln in lines if ln.get("worker") == worker]

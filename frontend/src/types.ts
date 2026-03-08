@@ -131,6 +131,7 @@ export interface WorkerSchedule {
   run_embed_worker_interval_sec: number
   run_collect_worker_interval_sec: number
   embed_interval_sec: number
+  run_translate_worker_interval_sec: number
 }
 
 export interface WorkerStatusResponse {
@@ -144,4 +145,5 @@ export interface WorkerStatusResponse {
   embed_worker: { unprocessed: number; borderline_pending: number }
   collect_worker: { next_keyword: string | null; last_collected_at: string | null }
   embed_vectorize: { pending: number }
+  translation_worker: { pending: number }
 }
