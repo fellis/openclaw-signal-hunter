@@ -333,8 +333,10 @@ async def get_workers_logs(
             ln["worker"] = "embed"
         elif "6335" in msg or ("embedder" in msg and "/embed" in msg):
             ln["worker"] = "run_embed_worker"
+        elif "api.github.com" in msg or "github.com" in msg or "reddit.com" in msg or "stackoverflow.com" in msg or "huggingface.co" in msg:
+            ln["worker"] = "run_collect_worker"
 
-    # Runner stdout JSON: assign to LLM or Translate by content (run_worker / run_translate_worker _out())
+    # Runner stdout JSON: assign to worker by content (skill _out() output)
     for ln in lines:
         if ln.get("worker") != RUNNER_WORKER:
             continue
@@ -345,6 +347,8 @@ async def get_workers_logs(
             ln["worker"] = "run_translate_worker"
         elif '"pending_remaining"' in msg or '"tasks"' in msg:
             ln["worker"] = "run_worker"
+        elif '"phase"' in msg and '"embed"' in msg and '"total"' in msg:
+            ln["worker"] = "embed"
 
     if worker != "all":
         lines = [ln for ln in lines if ln.get("worker") == worker]
