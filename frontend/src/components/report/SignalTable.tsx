@@ -570,6 +570,7 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
                 Comments
               </span>
             </th>
+            <th className="pr-4" style={thStyle} />
             <th className="text-right pr-4" style={thStyle}>
               <SortHeader label="Created" col="last_signal_at" {...colProps} alignRight />
             </th>
