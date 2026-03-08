@@ -317,7 +317,7 @@ function ClusterRow({
           </div>
         </td>
         <td className="pr-4 py-3 align-middle">
-          <SourcePills breakdown={cluster.sources_breakdown} singleLine />
+          <SourcePills breakdown={cluster.sources_breakdown} />
         </td>
         <td className="pr-4 py-3 align-middle">
           <div className="flex justify-end">
@@ -425,7 +425,7 @@ function CategoryRow({
           </div>
         </td>
         <td className="pr-4 py-3 align-middle">
-          <SourcePills breakdown={category.sources_breakdown} singleLine />
+          <SourcePills breakdown={category.sources_breakdown} />
         </td>
         <td className="pr-4 py-3 align-middle">
           <div className="flex justify-end">
@@ -521,7 +521,7 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
         <colgroup>
           <col style={{ width: 32 }} />
           <col style={{ width: 'min(380px, 32%)' }} />
-          <col style={{ width: 150 }} />
+          <col style={{ width: 220 }} />
           <col style={{ width: 100 }} />
           <col style={{ width: 76 }} />
           <col style={{ width: 76 }} />
