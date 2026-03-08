@@ -115,6 +115,8 @@ services:
       - EMBEDDER_VECTORIZER_URL=http://embedder-vectorizer:6336
       - TRANSLATOR_URL=https://llm.aegisalpha.io/translator
       - LOG_LEVEL=INFO
+      - SH_COLLECT_INTERVAL=120
+      - TRANSLATE_BATCH_SIZE=64
 
 volumes:
   pgdata:

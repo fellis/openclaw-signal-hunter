@@ -206,22 +206,22 @@ def cmd_run_collect_worker(json_str: str = "{}") -> None:
 
     storage = _make_storage()
 
-    stale = storage.get_stale_keywords(min_age_hours=24, limit=1)
+    stale = storage.get_stale_keywords(min_age_hours=24, limit=2)
     if not stale:
         _out({"status": "idle", "note": "All keywords collected within last 24h."})
         return
 
-    keyword = stale[0]
-    # Lock for 24h before starting - prevents re-trigger if collect takes > 5 min
-    storage.update_keyword_collected_at(keyword)
-
     orch = Orchestrator(config, storage)
-    result = orch.collect(keywords=[keyword])
+    results = []
+    for keyword in stale:
+        # Lock for 24h before starting - prevents re-trigger if collect takes > interval
+        storage.update_keyword_collected_at(keyword)
+        result = orch.collect(keywords=[keyword])
+        # Update again with actual completion time
+        storage.update_keyword_collected_at(keyword)
+        results.append({"keyword": keyword, **result})
 
-    # Update again with actual completion time
-    storage.update_keyword_collected_at(keyword)
-
-    _out({"status": "done", "keyword": keyword, **result})
+    _out({"status": "done", "collected": results})
 
 
 def cmd_embed() -> None:
