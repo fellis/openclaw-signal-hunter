@@ -178,66 +178,6 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // Suggest rules
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_suggest_rules',
-      description:
-        'Ask LLM to suggest extraction/classification rules for a keyword. ' +
-        'Show rules to user for review before approving. ' +
-        'Triggers: "suggest rules for cursor.ai", "create classification rules", "what rules to use".',
-      parameters: {
-        type: 'object',
-        properties: {
-          keyword: { type: 'string', description: 'Topic/product to generate rules for' },
-        },
-        required: ['keyword'],
-      },
-      async execute(_id, params) {
-        const p = params as { keyword: string };
-        const result = await runSkillCommand(cfg, 'suggest_rules', p.keyword);
-        if (!result.success) return text(`Suggest rules failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        const rules = d?.suggested_rules;
-        if (Array.isArray(rules)) {
-          const lines = [
-            `**Suggested rules for "${p.keyword}":**`,
-            ``,
-            ...rules.map((r: Record<string, unknown>, i: number) =>
-              `${i + 1}. **${r.name}** (priority ${r.priority ?? 1})\n   ${r.description}`
-            ),
-            ``,
-            `To save these rules, call \`signal_hunter_approve_rules\` (no parameters needed).`,
-          ];
-          return text(lines.join('\n'));
-        }
-        return text(String(rules));
-      },
-    },
-
-    // ----------------------------------------------------------------
-    // Approve rules
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_approve_rules',
-      description:
-        'Save the extraction rules that were suggested by signal_hunter_suggest_rules. ' +
-        'Rules are automatically saved in pending state by suggest_rules - no parameters needed. ' +
-        'Just call this after the user confirms they want to save the suggested rules. ' +
-        'Triggers: "approve rules", "save these rules", "confirm rules", "да сохрани правила".',
-      parameters: {
-        type: 'object',
-        properties: {},
-      },
-      async execute() {
-        const result = await runSkillCommand(cfg, 'approve_rules');
-        if (!result.success) return text(`Approve rules failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        return text(`Rules saved: **${d?.rules_saved ?? 0}** rules in config.json`);
-      },
-    },
-
-    // ----------------------------------------------------------------
     // Check sources
     // ----------------------------------------------------------------
     {
@@ -466,13 +406,13 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       name: 'signal_hunter_set_routing',
       description:
         'Change LLM provider for a specific operation. ' +
-        'Triggers: "use claude for classification", "use local for query", "route process to claude".',
+        'Triggers: "use claude for query", "use local for resolve_enrich", "route borderline_relevance to local".',
       parameters: {
         type: 'object',
         properties: {
           operation: {
             type: 'string',
-            description: 'Operation: process | suggest_rules | resolve_enrich | resolve_strategy | query',
+            description: 'Operation: borderline_relevance | summarize_batch | resolve_enrich | resolve_strategy | query',
           },
           provider: { type: 'string', description: 'Provider: local | claude' },
         },

@@ -15,7 +15,6 @@ from typing import Any
 
 from core.embedder import Embedder
 from core.models import ExtractionRule, KeywordProfile, SearchPlan, SearchTarget
-from core.processor import Processor
 from core.registry import BaseCollector, get, get_all, load_all_collectors
 from storage.postgres import PostgresStorage
 from storage.vector import VectorStorage
@@ -158,26 +157,19 @@ class Orchestrator:
 
     def process(self, router, max_batches: int | None = None) -> dict[str, Any]:
         """
-        Classify unprocessed signals. Mode is selected by config.processor.mode:
-          "embed" - embedding cosine similarity + LLM summary only (faster, no GPU for classify)
-          "llm"   - full LLM classify (default, legacy behaviour)
+        Classify unprocessed signals via embedding similarity (EmbedProcessor).
         max_batches: None = process all; int = stop after N batches (cron mode).
         Returns {total: int, remaining: int}.
         """
         rules = self._load_rules()
         if not rules:
             _emit({"status": "done", "phase": "process", "total": 0,
-                   "note": "No extraction_rules defined. Run suggest_rules first."})
+                   "note": "No extraction_rules defined. Add rules to config first."})
             return {"total": 0, "remaining": 0}
 
-        proc_mode = self._config.get("processor", {}).get("mode", "llm")
-        if proc_mode == "embed":
-            from core.embed_processor import EmbedProcessor  # noqa: PLC0415
-            processor = EmbedProcessor(router, self._storage, rules, self._config)
-        else:
-            processor = Processor(router, self._storage, rules, self._config)
-
-        _emit({"status": "running", "phase": "process", "processor": proc_mode,
+        from core.embed_processor import EmbedProcessor  # noqa: PLC0415
+        processor = EmbedProcessor(self._storage, rules, self._config)
+        _emit({"status": "running", "phase": "process",
                "mode": f"max_batches={max_batches}" if max_batches else "all"})
         total = processor.process_all(max_batches=max_batches)
         if total == -1:
@@ -337,7 +329,7 @@ Provide a structured answer. Include the URL for every claim."""
         )
 
     def reprocess(
-        self, keyword: str, rule_names: list[str] | None, router
+        self, keyword: str, rule_names: list[str] | None
     ) -> dict[str, Any]:
         """
         Delete ProcessedSignal + Qdrant vectors for keyword (optionally filtered by rules),

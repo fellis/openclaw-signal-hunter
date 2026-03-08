@@ -24,14 +24,52 @@
   },
 
   "processor": {
-    "mode": "embed",
     "relevance_threshold": 0.40,
     "rule_threshold": 0.42,
+    "neg_weight": 0.4,
+    "neg_min_sim": 0.3,
     "embed_batch_size": 32,
     "summary_batch_size": 5,
-    "batch_size": 25,
+    "batch_size": 50,
     "max_tokens_per_batch": 20000,
     "max_body_chars": 1000
+  },
+
+  "hybrid_relevance": {
+    "enabled": true,
+    "domain_high": 0.40,
+    "domain_low": 0.28,
+    "llm_task_priority": 70,
+    "llm_prompt_version": "v6",
+    "llm_body_chars": 600,
+    "llm_max_tokens": 150,
+    "llm_temperature": 0.0,
+    "domain_anchors": {
+      "positive": [
+        "AI model training and fine-tuning deep learning",
+        "large language model LLM inference and serving",
+        "machine learning pipeline MLOps deployment",
+        "AI agent framework orchestration tool calling",
+        "vector database embeddings semantic search RAG",
+        "LLM prompt engineering evaluation benchmark",
+        "GPU computing CUDA deep learning acceleration",
+        "MCP model context protocol tool integration",
+        "retrieval augmented generation knowledge base",
+        "open source AI framework library SDK"
+      ],
+      "negative": [
+        "web frontend CSS design HTML template",
+        "gaming bot cheat automation game script",
+        "political news current events government",
+        "cooking recipes food preparation kitchen",
+        "sports scores tournament bracket results",
+        "e-commerce shopping cart checkout payment",
+        "database administration PostgreSQL backup",
+        "networking firewall eBPF proxy load balancer",
+        "cryptocurrency blockchain mining NFT",
+        "mobile app store rejection review"
+      ]
+    }
   },
 
   "llm_providers": {
@@ -43,11 +81,11 @@
   },
 
   "llm_routing": {
-    "process":          "local",
-    "suggest_rules":    "local",
-    "resolve_enrich":   "local",
-    "resolve_strategy": "claude",
-    "query":            "claude"
+    "borderline_relevance": "local",
+    "summarize_batch":      "local",
+    "resolve_enrich":       "local",
+    "resolve_strategy":     "claude",
+    "query":                "claude"
   },
 
   "embedder": {

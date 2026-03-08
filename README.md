@@ -54,15 +54,13 @@ skill/main.py         ← CLI dispatcher
      │
      ├── core/resolver.py        ← keyword discovery + LLM enrichment
      ├── core/orchestrator.py    ← collect → embed pipeline
-     ├── core/embed_processor.py ← embedding-based classify (no LLM, default mode)
-     │                              universal signal-type rules; per-rule thresholds;
-     │                              negative anchor penalty (neg_weight, neg_min_sim);
-     │                              HN noise prefix stripping before embedding
+     ├── core/embed_processor.py ← embedding-based classify; domain pre-filter (positive/negative anchors)
+     │                              then rule matching; borderline signals → llm_task_queue for LLM
+     │                              universal signal-type rules; neg_weight, neg_min_sim; strip_hn_prefix
      ├── core/embed_worker.py    ← embed worker: runs EmbedProcessor per cron tick
-     ├── core/processor.py       ← LLM classification fallback (mode: "llm")
      ├── core/embedder.py        ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py      ← routes ops to local/Claude by config
-     ├── core/llm_worker.py      ← LLM task queue worker (resolve + summarize_batch only)
+     ├── core/llm_worker.py      ← LLM task queue: resolve + borderline_relevance + summarize_batch
      ├── core/translate_worker.py ← translation worker: one batch per LLM Worker tick
      │                              translates title+summary → signal_translations table
      │
@@ -110,8 +108,8 @@ External services (not in docker-compose):
 - Each collector is a self-contained module implementing `BaseCollector`
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
-- **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > summarize_batch(90)
-- **Four separate cron jobs:** Embed Worker (every minute) classifies signals via embeddings (no LLM) using `embedder:6335`; LLM Worker (every minute) handles resolve + summarize + translate (in one tick); Collect Worker (every 5 min) handles API collection; Auto Embed (every minute) vectorizes classified signals into Qdrant using `embedder-vectorizer:6336` - classification and vectorization never compete for the same embedder instance
+- **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > borderline_relevance(70) > summarize_batch(90)
+- **Four separate cron jobs:** Embed Worker (every minute) classifies via embeddings: domain pre-filter (auto-accept/reject/borderline), borderline enqueued for LLM; LLM Worker (every minute) handles resolve + borderline_relevance + summarize + translate; Collect Worker (every 5 min); Auto Embed (every minute) vectorizes into Qdrant via `embedder-vectorizer:6336`
 - **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
 - **Daily collection per keyword:** Collect Worker locks each keyword with `last_collected_at = now()` before collecting; re-triggers only after 24h; stalest keywords first
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
@@ -285,18 +283,18 @@ You: show providers
 ClawBot:
 Provider | Type           | Model             | Operations
 ---------|----------------|-------------------|---------------------------
-local    | openai_compat  | devstral          | summarize, suggest_rules, resolve_enrich
+local    | openai_compat  | devstral          | borderline_relevance, summarize_batch, resolve_enrich
 claude   | anthropic      | claude-haiku-4-5  | resolve_strategy, query
 ```
 
 To route an operation to a different provider:
 
 ```
-You: use claude for classification
+You: use claude for query
 ```
 
 ```
-ClawBot: ✓ llm_routing.process → claude
+ClawBot: ✓ llm_routing.query → claude
 ```
 
 ---
@@ -394,39 +392,18 @@ Each rule is defined with:
 - `examples` - additional anchor phrases (each becomes a separate embedding vector; similarity is `max` across all anchors)
 - `negative_examples` - used as penalty anchors: if a signal is too close to a negative example, its adjusted similarity drops
 
-Rules are stored in `config.json` under `extraction_rules`. To tune them via chat:
-
-```
-You: suggest rules for RAG
-```
-
-The LLM analyzes real posts from the database and can suggest additions or refinements. You approve and save:
-
-```
-You: approve
-ClawBot: ✓ Rules saved to config.json
-```
-
-In practice the universal rules require no per-keyword customization. All keywords (RAG, ollama, LangChain, etc.) are classified through the same ruleset - the matched rule tells you *what kind of signal it is*, the keywords in `raw_signals` tell you *what it is about*.
+Rules are stored in `config.json` under `extraction_rules` (or loaded from `universal-rules.json`). The universal ruleset requires no per-keyword customization. All keywords (RAG, ollama, LangChain, etc.) are classified through the same ruleset - the matched rule tells you *what kind of signal it is*, the keywords in `raw_signals` tell you *what it is about*.
 
 ---
 
-### Step 6 - Process and embed
+### Step 6 - Classify and embed
 
-```
-You: process
-```
+Classification is fully automatic: Embed Worker (cron every minute) runs domain pre-filter + rule matching; borderline signals are enqueued for LLM Worker, which decides relevance and enqueues summarize. No manual "process" step.
 
-```
-ClawBot: Classifying 1688 signals (embed mode)...
-✓ Done. 1453 classified (relevant: 734, irrelevant: 719)
-  - Classify: embedding cosine similarity (~0.1s/signal, no LLM)
-  - Summaries: queued for async generation by LLM Worker
-```
+- **Embed Worker:** domain score (positive/negative anchors) → auto-accept, auto-reject, or borderline → LLM task queue.
+- **LLM Worker:** borderline_relevance (v6 prompt), then summarize_batch for relevant signals.
 
-> In practice you don't need to call `process` manually - the Embed Worker cron handles it automatically every minute.
-
-Embedding happens automatically via the cron job (every 10 minutes). To run immediately:
+Embedding into Qdrant happens automatically via the Auto Embed cron (every minute). To run immediately:
 
 ```
 You: embed
@@ -634,9 +611,7 @@ Or via slash command: `/sh embedder [status|start|stop|restart|logs|build]`
 | `retry_failed` | Reset all failed LLM tasks back to pending |
 | `embed` | Vectorize pending signals into Qdrant (runs automatically via cron) |
 | `set_embed_schedule <json>` | Configure max items per embed cron run |
-| `reprocess <json>` | Delete and reclassify signals for a keyword |
-| `suggest_rules <keyword>` | Analyze real posts, suggest extraction rules |
-| `approve_rules <json>` | Save approved rules to config |
+| `reprocess <json>` | Delete and reclassify signals for a keyword (Embed Worker re-runs on next tick) |
 | `embedder_service <json>` | Manage embedder Docker container (status/start/stop/restart/logs/build) |
 | `query <prompt>` | Semantic search + LLM synthesis |
 | `generate_change_report <keyword>` | Delta report since last snapshot |
@@ -667,22 +642,23 @@ Key sections:
   },
   "extraction_rules": [],
   "processor": {
-    "mode": "embed",
     "relevance_threshold": 0.40,
     "rule_threshold": 0.50,
-    "rule_thresholds": {
-      "security_concern": 0.57,
-      "positive_feedback": 0.54,
-      "market_observation": 0.52
-    },
-    "neg_weight": 0.5,
-    "neg_min_sim": 0.50,
+    "rule_thresholds": { "security_concern": 0.57, "positive_feedback": 0.54 },
+    "neg_weight": 0.4,
+    "neg_min_sim": 0.3,
     "embed_batch_size": 32,
     "summary_batch_size": 5,
-    "summary_fetch_limit": 50,
     "batch_size": 50,
     "max_batches_per_run": 5,
     "max_body_chars": 1000
+  },
+  "hybrid_relevance": {
+    "enabled": true,
+    "domain_high": 0.40,
+    "domain_low": 0.28,
+    "llm_task_priority": 70,
+    "domain_anchors": { "positive": ["..."], "negative": ["..."] }
   },
   "embedder": {
     "model": "BAAI/bge-m3",
@@ -698,11 +674,11 @@ Key sections:
     "max_items_per_run": 512
   },
   "llm_routing": {
-    "process":          "local",
-    "suggest_rules":    "local",
-    "resolve_enrich":   "local",
-    "resolve_strategy": "claude",
-    "query":            "claude"
+    "borderline_relevance": "local",
+    "summarize_batch":      "local",
+    "resolve_enrich":       "local",
+    "resolve_strategy":     "claude",
+    "query":                "claude"
   },
   "change_report": {
     "top_n_new": 10,
@@ -717,20 +693,22 @@ Key sections:
 }
 ```
 
-> **Note:** `llm_routing.process` is only used when `mode: "llm"` (fallback). In `embed` mode classification is done by cosine similarity - no LLM call for classify at all.
-
 **`processor` settings explained:**
-- `mode: "embed"` - use embedding cosine similarity for classify + LLM for summary only. Set to `"llm"` to revert to full LLM classification.
 - `relevance_threshold: 0.40` - minimum cosine similarity across all rules to consider a signal at all. Signal is only marked `is_relevant=true` if it also matches at least one rule.
 - `rule_threshold: 0.50` - default minimum adjusted similarity to assign a rule to a signal. A signal is relevant only if at least one rule passes this threshold - prevents generic on-topic content without a concrete category from flooding the feed.
 - `rule_thresholds` - per-rule overrides for `rule_threshold`. Useful to tighten noisy rules without affecting others. Example: `{"security_concern": 0.57}` raises the bar for that rule only.
-- `neg_weight: 0.5` - weight of the negative anchor penalty. For each rule: `adjusted_sim = pos_sim - neg_weight * max(0, neg_sim - neg_min_sim)`. Set to `0.0` to disable.
-- `neg_min_sim: 0.50` - floor for the negative penalty. Only negatives with similarity above this threshold count - prevents background noise from penalizing genuine signals.
+- `neg_weight: 0.4` - weight of the negative anchor penalty. For each rule: `adjusted_sim = pos_sim - neg_weight * max(0, neg_sim - neg_min_sim)`. Set to `0.0` to disable.
+- `neg_min_sim: 0.3` - floor for the negative penalty. Only negatives with similarity above this threshold count - prevents background noise from penalizing genuine signals.
 - `embed_batch_size: 32` - signals per embedder HTTP call during classify.
 - `summary_batch_size: 5` - relevant signals per LLM call in summarize_batch worker.
-- `summary_fetch_limit: 50` - signals fetched per summarize_batch worker tick.
 - `batch_size: 50` - raw signals fetched per Embed Worker batch.
 - `max_batches_per_run: 5` - max batches the Embed Worker processes per cron tick (50 × 5 = 250 signals/min max).
+
+**`hybrid_relevance`** (domain pre-filter + LLM for borderline):
+- `enabled: true` - use domain score (positive/negative anchors) before rule matching; signals between `domain_low` and `domain_high` go to LLM (borderline_relevance task).
+- `domain_high: 0.40`, `domain_low: 0.28` - thresholds; above high = auto-accept, below low = auto-reject.
+- `llm_task_priority: 70` - priority of borderline_relevance in llm_task_queue (resolve=50, summarize_batch=90).
+- `domain_anchors.positive` / `domain_anchors.negative` - phrase lists for AI/ML relevance; see config.example.json.
 
 **`embedder` settings explained:**
 - `service_url` - HTTP endpoint used by Embed Worker (classify) and `signal_hunter_query`. If unreachable, falls back to loading bge-m3 locally.

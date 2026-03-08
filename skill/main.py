@@ -263,9 +263,8 @@ def cmd_reprocess(json_str: str) -> None:
 
     config = _load_config()
     storage = _make_storage()
-    router = _make_router(config)
     orch = Orchestrator(config, storage)
-    result = orch.reprocess(keyword, rule_names, router)
+    result = orch.reprocess(keyword, rule_names)
     _out({"status": "done", "phase": "reprocess", **result})
 
 
@@ -400,7 +399,7 @@ def cmd_list_providers() -> None:
 def cmd_set_routing(json_str: str) -> None:
     """
     Update LLM routing for an operation.
-    json_str: '{"operation": "process", "provider": "claude"}'
+    json_str: '{"operation": "resolve_enrich", "provider": "claude"}'
     """
     try:
         data = json.loads(json_str)
@@ -409,7 +408,7 @@ def cmd_set_routing(json_str: str) -> None:
 
     operation = data.get("operation", "")
     provider = data.get("provider", "")
-    valid_ops = ["process", "suggest_rules", "resolve_enrich", "resolve_strategy", "query"]
+    valid_ops = ["borderline_relevance", "summarize_batch", "resolve_enrich", "resolve_strategy", "query"]
     valid_providers = ["local", "claude"]
 
     if operation not in valid_ops:
@@ -737,109 +736,6 @@ def cmd_set_embed_schedule(json_str: str) -> None:
     })
 
 
-def cmd_suggest_rules(keyword: str) -> None:
-    """Analyze real posts from DB and suggest extraction rules."""
-    from core.llm_router import LLMCall  # noqa: PLC0415
-
-    config = _load_config()
-    storage = _make_storage()
-    router = _make_router(config)
-
-    # Fetch real raw signals from DB (200-300 posts)
-    sample = storage.fetch_raw_sample(keyword=keyword, limit=300)
-    if not sample:
-        # Fallback to generic prompt if no data yet
-        sample_text = "(no data collected yet - generic suggestion)"
-    else:
-        # Use top 50 by score to keep prompt manageable
-        top_sample = sorted(sample, key=lambda x: x.get("score", 0) or 0, reverse=True)[:50]
-        sample_text = "\n\n".join(
-            f"[{i+1}] {s.get('title', '')}\n{(s.get('body') or '')[:300]}"
-            for i, s in enumerate(top_sample)
-        )
-
-    prompt = f"""Keyword: "{keyword}"
-
-Below are real posts from developer platforms about this topic:
-{sample_text}
-
-Based on these REAL posts, suggest 5-8 extraction_rules for classifying signals.
-Each rule should match a specific type of valuable signal (pain point, feature request, comparison, adoption, etc.).
-Use actual phrases from the posts as examples.
-
-Return JSON array:
-[
-  {{
-    "name": "short_snake_case_id",
-    "description": "What kind of content this rule matches",
-    "priority": 1-5,
-    "examples": ["exact phrase from posts or close paraphrase", "another example"]
-  }}
-]
-
-Return ONLY the JSON array. Examples must be real phrases from the posts above."""
-
-    call = LLMCall(
-        operation="suggest_rules",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1500,
-        temperature=0.2,
-    )
-    raw = router.complete(call)
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-    try:
-        rules = json.loads(raw)
-    except json.JSONDecodeError:
-        rules = raw
-
-    # Save pending so approve_rules needs no parameters
-    if isinstance(rules, list):
-        from storage.pending import PendingStore  # noqa: PLC0415
-        PendingStore().save("rules", {"keyword": keyword, "rules": rules})
-
-    _out({"keyword": keyword, "analyzed_posts": len(sample), "suggested_rules": rules})
-
-
-def cmd_approve_rules(json_str: str = "") -> None:
-    """
-    Save approved extraction rules to config.json.
-    No arguments needed - reads rules from pending state set by suggest_rules.
-    Optional: pass explicit JSON array to override pending rules.
-    """
-    from storage.pending import PendingStore  # noqa: PLC0415
-
-    rules = None
-
-    # Try explicit JSON first (backwards compat)
-    if json_str.strip():
-        try:
-            parsed = json.loads(json_str)
-            if isinstance(parsed, list):
-                rules = parsed
-            elif isinstance(parsed, dict) and "confirmed" in parsed:
-                pass  # fall through to pending
-        except json.JSONDecodeError:
-            pass
-
-    # Fall back to pending state
-    if rules is None:
-        pending = PendingStore()
-        pending_data = pending.load("rules")
-        if pending_data:
-            rules = pending_data.get("rules", [])
-            pending.clear("rules")
-
-    if not rules:
-        _err("No rules found. Run sh_suggest_rules first, or pass rules as JSON array.")
-
-    cfg_mgr = _make_config_manager()
-    cfg_mgr.set_nested(["extraction_rules"], rules)
-    _out({"status": "ok", "rules_saved": len(rules)})
-
-
 def cmd_generate_change_report(keyword: str) -> None:
     """Generate delta report since last snapshot."""
     from core.orchestrator import Orchestrator  # noqa: PLC0415
@@ -1063,8 +959,6 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "delete_keywords":          (cmd_delete_keywords, True),
     "retry_failed":             (cmd_retry_failed, False),
     "set_embed_schedule":       (cmd_set_embed_schedule, True),
-    "suggest_rules":            (cmd_suggest_rules, True),
-    "approve_rules":            (cmd_approve_rules, False),
     "generate_change_report":   (cmd_generate_change_report, True),
     "preview_change_report":    (cmd_preview_change_report, True),
     "approve_report_template":  (cmd_approve_report_template, False),

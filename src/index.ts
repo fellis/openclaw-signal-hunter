@@ -75,7 +75,7 @@ export default function register(api: PluginApi, configParam?: PluginConfig) {
   if (api.registerCommand) {
     api.registerCommand({
       name: 'sh',
-      description: 'Signal Hunter: status | query <text> | collect | process | embed | update',
+      description: 'Signal Hunter: status | query <text> | collect | embed | update',
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
@@ -116,13 +116,6 @@ export default function register(api: PluginApi, configParam?: PluginConfig) {
             if (!result.success) return { text: `Collect error: ${result.error}` };
             const d = result.data as Record<string, unknown>;
             return { text: `Collected: ${d?.total ?? 0} new signals` };
-          }
-
-          case 'process': {
-            const result = await runSkillCommand(runnerConfig, 'process');
-            if (!result.success) return { text: `Process error: ${result.error}` };
-            const d = result.data as Record<string, unknown>;
-            return { text: `Processed: ${d?.total ?? 0} signals` };
           }
 
           case 'embed': {
@@ -195,7 +188,7 @@ export default function register(api: PluginApi, configParam?: PluginConfig) {
 
           default:
             return {
-              text: `Unknown subcommand: ${sub}\nUsage: /sh status | query <text> | collect | process | embed | update | report <kw> | sources | keywords | embedder [status|start|stop|restart|logs|build]`,
+              text: `Unknown subcommand: ${sub}\nUsage: /sh status | query <text> | collect | embed | update | report <kw> | sources | keywords | embedder [status|start|stop|restart|logs|build]`,
             };
         }
       },
