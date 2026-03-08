@@ -22,14 +22,25 @@ router = APIRouter()
 # Max tail lines for logs (cap on backend)
 LOG_TAIL_MAX = 20_000
 
-# Logger name -> worker filter value
+# Logger name (Python %(name)s) -> worker filter value (matches run_workers.sh commands)
 LOGGER_TO_WORKER: dict[str, str] = {
+    "skill.main": "runner",
     "core.llm_worker": "run_worker",
+    "core.llm_router": "run_worker",
     "core.translate_worker": "run_worker",
+    "core.resolver": "run_worker",
     "core.embed_worker": "run_embed_worker",
     "core.embed_processor": "run_embed_worker",
-    "core.orchestrator": "embed",  # collect/embed both use orchestrator; default to embed for logs
+    "core.orchestrator": "embed",
     "core.embedder": "embed",
+    "storage.postgres": "run_worker",
+    "storage.vector": "embed",
+    "storage.pending": "run_worker",
+    "collectors.github": "run_collect_worker",
+    "collectors.hackernews": "run_collect_worker",
+    "collectors.reddit": "run_collect_worker",
+    "collectors.stackoverflow": "run_collect_worker",
+    "collectors.huggingface": "run_collect_worker",
 }
 # Fallback for shell lines (e.g. "Worker runner started...")
 RUNNER_WORKER = "runner"
@@ -57,24 +68,17 @@ def _parse_log_line(line: str) -> dict[str, Any] | None:
     return {"ts": "", "level": "info", "worker": RUNNER_WORKER, "message": line}
 
 
-def _get_docker_logs(
-    container_name: str,
-    tail: int = 500,
-    since: int | None = None,
-) -> tuple[list[dict[str, Any]], int | None]:
-    """Fetch container logs via Docker SDK. Returns (parsed_lines, next_since_unix)."""
+def _get_worker_container():
+    """Resolve worker container via name or Compose label. Returns container or None."""
     try:
         import docker
         from docker.errors import NotFound
     except ImportError:
-        log.warning("docker SDK not installed")
-        return [], None
-
+        return None
     socket_path = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
     if not os.path.exists(socket_path):
-        log.warning("Docker socket not found: %s", socket_path)
-        return [], None
-
+        return None
+    container_name = os.environ.get("WORKER_CONTAINER_NAME", "signal-hunter-workers")
     try:
         client = docker.DockerClient(base_url=f"unix://{socket_path}")
         container = None
@@ -84,17 +88,27 @@ def _get_docker_logs(
             except NotFound:
                 pass
         if container is None:
-            # Find by Compose service label (works when project prefix changes container name)
             for c in client.containers.list():
                 if c.labels.get("com.docker.compose.service") == "signal-hunter-workers":
                     container = c
                     break
-        if container is None:
-            log.warning("Worker container not found (name=%r, no label match)", container_name)
-            return [], None
-    except Exception as e:
-        log.warning("Docker container %s: %s", container_name, e)
+        return container
+    except Exception:
+        return None
+
+
+def _get_docker_logs(
+    container_name: str,
+    tail: int = 500,
+    since: int | None = None,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Fetch container logs via Docker SDK. Returns (parsed_lines, next_since_unix)."""
+    container = _get_worker_container()
+    if container is None:
         return [], None
+    # Use requested name only for log context; we already resolved container
+    if not container_name:
+        container_name = "signal-hunter-workers"
 
     tail = max(1, min(tail, LOG_TAIL_MAX))
     since_dt = None
@@ -274,3 +288,22 @@ async def get_workers_logs(
 async def clear_workers_logs_view():
     """Client-side clear: no-op, returns ok. UI clears local state and refetches with tail only."""
     return {"status": "ok"}
+
+
+@router.post("/restart")
+async def restart_workers():
+    """Restart the worker container via Docker API. Requires Docker socket mounted."""
+    from fastapi import HTTPException
+
+    container = _get_worker_container()
+    if container is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Worker container not found. Ensure Docker socket is mounted and workers are running.",
+        )
+    try:
+        container.restart(timeout=30)
+        return {"status": "ok", "message": "Workers container restarting."}
+    except Exception as e:
+        log.exception("Worker container restart failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))

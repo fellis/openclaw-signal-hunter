@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { RefreshCw, Loader2, Trash2, Pause, Play } from 'lucide-react'
+import { RefreshCw, Loader2, Trash2, Pause, Play, RotateCw } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import PipelineStrip from '@/components/layout/PipelineStrip'
 import { fetchStats } from '@/api/report'
-import { fetchWorkerStatus, fetchWorkerLogs } from '@/api/workers'
+import { fetchWorkerStatus, fetchWorkerLogs, restartWorkers } from '@/api/workers'
 import type { StatsResponse } from '@/types'
 import type { WorkerStatusResponse, WorkerLogLine } from '@/types'
 
@@ -26,6 +26,7 @@ export default function WorkersLogs() {
   const [levelFilter, setLevelFilter] = useState('all')
   const [paused, setPaused] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
@@ -103,6 +104,22 @@ export default function WorkersLogs() {
     setLines([])
     setNextSince(undefined)
     setError(null)
+  }
+
+  const handleRestart = async () => {
+    setRestarting(true)
+    setError(null)
+    try {
+      await restartWorkers()
+      setLines([])
+      setNextSince(undefined)
+      loadStatus()
+      if (!paused) loadLogs()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setRestarting(false)
+    }
   }
 
   const WORKER_OPTIONS = [
@@ -211,6 +228,16 @@ export default function WorkersLogs() {
         >
           {paused ? <Play size={12} /> : <Pause size={12} />}
           {paused ? 'Resume' : 'Pause'}
+        </button>
+        <button
+          onClick={handleRestart}
+          disabled={restarting}
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded border hover:opacity-80 disabled:opacity-50"
+          style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+          title="Restart worker container (Docker)"
+        >
+          {restarting ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
+          Restart workers
         </button>
       </div>
 

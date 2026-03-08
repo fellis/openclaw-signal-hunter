@@ -30,3 +30,12 @@ export async function fetchWorkerLogs(params: FetchWorkerLogsParams = {}): Promi
   if (!res.ok) throw new Error(`Workers logs failed: ${res.status}`)
   return res.json()
 }
+
+export async function restartWorkers(): Promise<{ status: string; message?: string }> {
+  const res = await fetch('/api/workers/restart', { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail ?? `Restart failed: ${res.status}`)
+  }
+  return res.json()
+}
