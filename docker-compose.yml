@@ -99,9 +99,8 @@ services:
     volumes:
       - ./config.json:/app/config.json:ro
     restart: unless-stopped
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
+    extra_hosts:
+      - "llm.aegisalpha.io:37.48.70.33"
     depends_on:
       postgres:
         condition: service_healthy
