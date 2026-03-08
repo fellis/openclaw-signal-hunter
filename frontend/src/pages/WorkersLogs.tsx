@@ -222,7 +222,18 @@ export default function WorkersLogs() {
                     setError(null)
                     try {
                       const data = await retryFailedWorkers()
-                      if (data.reset != null) await loadStatus()
+                      const reset = typeof data.reset === 'number' ? data.reset : 0
+                      if (reset > 0 && status) {
+                        setStatus({
+                          ...status,
+                          llm_queue: {
+                            ...status.llm_queue,
+                            failed: 0,
+                            pending: status.llm_queue.pending + reset,
+                          },
+                        })
+                      }
+                      await loadStatus()
                     } catch (e) {
                       setError(e instanceof Error ? e.message : 'Retry failed')
                     } finally {

@@ -19,7 +19,7 @@ current_worker = "runner"
 # Commands that are workers: their JSON output goes through logger (with worker tag), not raw stdout.
 # Ids must match backend web_server.routers.workers.WORKER_IDS (single source of truth for filter/labels is API).
 WORKER_COMMANDS = frozenset({
-    "run_worker", "run_translate_worker", "run_collect_worker", "run_embed_worker", "embed",
+    "run_worker", "run_worker_daemon", "run_translate_worker", "run_collect_worker", "run_embed_worker", "embed",
 })
 
 

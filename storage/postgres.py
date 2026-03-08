@@ -847,6 +847,22 @@ class PostgresStorage:
                     (error[:2000], task_id),
                 )
 
+    def reset_llm_task_to_pending(self, task_id: str) -> None:
+        """
+        Set task back to 'pending' without incrementing retry_count.
+        Use for transient errors (e.g. DNS) so the task is retried without burning retries.
+        """
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE llm_task_queue
+                    SET status = 'pending', started_at = NULL, error = NULL
+                    WHERE id = %s
+                    """,
+                    (task_id,),
+                )
+
     def has_running_llm_task(self) -> bool:
         """Return True if any task is currently in 'running' status."""
         with self._conn() as conn:

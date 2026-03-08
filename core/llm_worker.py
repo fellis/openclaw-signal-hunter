@@ -78,6 +78,25 @@ def _extract_project(dedup_key: str) -> str:
     return ""
 
 
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """True if the error is transient (DNS, connection reset) and task should be re-queued without consuming retry."""
+    msg = str(exc).lower()
+    if any(
+        phrase in msg
+        for phrase in (
+            "name resolution",
+            "connection reset",
+            "server disconnected",
+            "connection refused",
+            "connection reset by peer",
+        )
+    ):
+        return True
+    if type(exc).__name__ == "gaierror":
+        return True
+    return False
+
+
 class LLMWorker:
     """
     Sequential LLM queue processor with time-budget loop.
@@ -88,6 +107,7 @@ class LLMWorker:
         self._config = config
         self._storage = storage
         self._embed_processor = None  # lazy init - only when borderline tasks exist
+        self._router = None  # reuse one router (and its HTTP connections) to avoid per-tick DNS resolution
 
     def run_loop(self, budget_seconds: int = _DEFAULT_BUDGET_SECONDS) -> dict[str, Any]:
         """Process tasks in a loop until queue is empty or time budget is exhausted."""
@@ -177,9 +197,15 @@ class LLMWorker:
 
             except Exception as e:
                 log.exception("[llm_worker] failed task_id=%s type=%s: %s", task_id, task_type, e)
+                err_str = str(e)
+                is_transient = _is_transient_network_error(e)
                 for t in tasks_batch:
-                    self._storage.fail_llm_task(t["id"], str(e))
-                    errors.append({"task_type": t["task_type"], "error": str(e)})
+                    if is_transient:
+                        self._storage.reset_llm_task_to_pending(t["id"])
+                        log.warning("[llm_worker] transient error, task %s reset to pending (no retry consumed)", t["id"])
+                    else:
+                        self._storage.fail_llm_task(t["id"], err_str)
+                    errors.append({"task_type": t["task_type"], "error": err_str})
 
         remaining = self._storage.get_llm_queue_status()
         pending_count = sum(1 for t in remaining if t["status"] == "pending")
@@ -483,5 +509,8 @@ class LLMWorker:
         return self._embed_processor
 
     def _make_router(self):
-        from core.llm_router import LLMRouter
-        return LLMRouter(self._config, usage_logger=self._storage.log_llm_usage)
+        """Reuse one router per worker instance so HTTP connections (and DNS resolution) are reused."""
+        if self._router is None:
+            from core.llm_router import LLMRouter
+            self._router = LLMRouter(self._config, usage_logger=self._storage.log_llm_usage)
+        return self._router

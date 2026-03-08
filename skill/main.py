@@ -477,6 +477,32 @@ def cmd_run_worker(json_str: str = "{}") -> None:
     _out(llm_result)
 
 
+def cmd_run_worker_daemon(json_str: str = "{}") -> None:
+    """
+    Long-running LLM worker: one process, one TCP connection to the LLM.
+    Runs run_loop() every SH_WORKER_INTERVAL seconds. Avoids per-tick DNS resolution
+    and connection churn that can cause intermittent [Errno -3] in containers.
+    """
+    import time
+    from core.llm_worker import LLMWorker  # noqa: PLC0415
+
+    config = _load_config()
+    interval = int(os.environ.get("SH_WORKER_INTERVAL", "60"))
+    storage = _make_storage()
+    worker = LLMWorker(config, storage)
+    while True:
+        if config.get("workers_paused", False):
+            _out({"status": "paused", "note": "LLM worker paused."})
+        else:
+            try:
+                llm_result = worker.run_loop()
+                _out(llm_result)
+            except Exception as e:
+                _out({"status": "error", "error": str(e)})
+        time.sleep(interval)
+        config = _load_config()
+
+
 def cmd_run_embed_worker(json_str: str = "{}") -> None:
     """
     Embed Worker: classifies raw signals using embedding similarity (no LLM).
@@ -903,6 +929,7 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "list_providers":           (cmd_list_providers, False),
     "set_routing":              (cmd_set_routing, True),
     "run_worker":               (cmd_run_worker, False),
+    "run_worker_daemon":        (cmd_run_worker_daemon, False),
     "run_embed_worker":         (cmd_run_embed_worker, False),
     "run_translate_worker":     (cmd_run_translate_worker, False),
     "queue_resolve":            (cmd_queue_resolve, True),

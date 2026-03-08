@@ -31,7 +31,7 @@ main() {
   # Each worker: own loop, own interval (parallel)
   ( while true; do python -m skill run_translate_worker || true; sleep "$INTERVAL_WORKER"; done ) &
   ( while true; do python -m skill run_collect_worker   || true; sleep "$INTERVAL_COLLECT"; done ) &
-  ( while true; do python -m skill run_worker           || true; sleep "$INTERVAL_WORKER"; done ) &
+  ( python -m skill run_worker_daemon ) &
   ( while true; do python -m skill run_embed_worker     || true; sleep "$INTERVAL_WORKER"; done ) &
   ( while true; do python -m skill embed                || true; sleep "$INTERVAL_WORKER"; done ) &
 

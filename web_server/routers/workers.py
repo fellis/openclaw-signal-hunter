@@ -29,6 +29,7 @@ LOG_TAIL_MAX = 20_000
 # Single source of truth for worker filter: ids and display labels (exposed via API; skill tags logs with these ids)
 WORKER_IDS = [
     "run_worker",
+    "run_worker_daemon",
     "run_translate_worker",
     "run_collect_worker",
     "run_embed_worker",
@@ -38,6 +39,7 @@ WORKER_IDS = [
 ]
 WORKER_LABELS: dict[str, str] = {
     "run_worker": "LLM",
+    "run_worker_daemon": "LLM",
     "run_translate_worker": "Translate",
     "run_collect_worker": "Collect",
     "run_embed_worker": "Embed classifier",
