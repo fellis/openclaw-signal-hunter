@@ -195,10 +195,10 @@ def cmd_update_plan(json_str: str) -> None:
 def cmd_run_collect_worker(json_str: str = "{}") -> None:
     """
     Collect worker: picks the single stalest keyword (not collected in 24h)
-    and collects signals for it. Called by a dedicated collect cron (e.g. every 5 min).
+    and collects signals for it. Called by the worker runner every 5 min (or manually).
 
     Runs independently from the LLM worker - no GPU/LLM usage.
-    Multiple cron ticks can run concurrently on different keywords safely
+    Multiple runner ticks can run concurrently on different keywords safely
     because last_collected_at is locked before collection starts.
     """
     from core.orchestrator import Orchestrator  # noqa: PLC0415
@@ -206,7 +206,7 @@ def cmd_run_collect_worker(json_str: str = "{}") -> None:
     config = _load_config()
 
     # Pause guard: set config.workers_paused = true to halt all collection/LLM
-    # workers during reclassification or maintenance without removing cron jobs.
+    # workers during reclassification or maintenance without stopping the worker runner.
     if config.get("workers_paused", False):
         _out({"status": "paused", "note": "Collection paused (workers_paused=true in config)."})
         return
@@ -422,11 +422,6 @@ def cmd_set_routing(json_str: str) -> None:
           "message": f"llm_routing.{operation} → {provider}"})
 
 
-_SH_EMBED_CRON_JOB_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-_SH_WORKER_CRON_JOB_ID = "e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b"
-_SH_EMBED_WORKER_CRON_JOB_ID = "f2e3d4c5-b6a7-8901-bcde-f23456789012"
-
-
 # ------------------------------------------------------------------
 # LLM Worker commands
 # ------------------------------------------------------------------
@@ -434,7 +429,7 @@ _SH_EMBED_WORKER_CRON_JOB_ID = "f2e3d4c5-b6a7-8901-bcde-f23456789012"
 def cmd_run_worker(json_str: str = "{}") -> None:
     """
     Process LLM tasks (resolve, summarize_batch) in a loop until queue is empty
-    or 50-second budget is exhausted. Called by cron every minute.
+    or 50-second budget is exhausted. Called by worker runner every minute (or manually).
 
     Behavior per loop iteration:
       1. Reset tasks stuck in 'running' for > 10 min (crash recovery)
@@ -444,8 +439,8 @@ def cmd_run_worker(json_str: str = "{}") -> None:
       5. On success: complete task. On error: retry up to 3 times then mark 'failed'.
       6. Repeat until queue empty or budget exceeded.
 
-    NOTE: embedding classification runs in a SEPARATE embed worker cron
-    (cmd_run_embed_worker). This worker is LLM-only.
+    NOTE: embedding classification runs in a separate embed worker loop (worker runner;
+    cmd_run_embed_worker). This worker is LLM-only.
     """
     from core.llm_worker import LLMWorker        # noqa: PLC0415
     from core.translate_worker import TranslateWorker  # noqa: PLC0415
@@ -453,7 +448,7 @@ def cmd_run_worker(json_str: str = "{}") -> None:
     config = _load_config()
 
     # Pause guard: set config.workers_paused = true to halt all collection/LLM
-    # workers during reclassification or maintenance without removing cron jobs.
+    # workers during reclassification or maintenance without stopping the worker runner.
     if config.get("workers_paused", False):
         _out({"status": "paused", "note": "LLM worker paused (workers_paused=true in config)."})
         return
@@ -462,7 +457,7 @@ def cmd_run_worker(json_str: str = "{}") -> None:
 
     llm_result = LLMWorker(config, storage).run_loop()
 
-    # Run one translation batch on the same tick (no separate cron needed).
+    # Run one translation batch on the same tick (no separate loop needed).
     try:
         tr_result = TranslateWorker(storage).run()
     except Exception as exc:
@@ -474,7 +469,7 @@ def cmd_run_worker(json_str: str = "{}") -> None:
 def cmd_run_embed_worker(json_str: str = "{}") -> None:
     """
     Embed Worker: classifies raw signals using embedding similarity (no LLM).
-    Called by a dedicated cron every minute.
+    Called by the worker runner every minute (or manually).
 
     Runs independently from the LLM worker - no LLM calls, no GPU usage.
     Uses the local embedder HTTP service (bge-m3) for vector similarity.
@@ -539,7 +534,7 @@ def cmd_queue_resolve(json_str: str) -> None:
         "total": len(keywords),
         "note": (
             f"{added} keywords added to queue, {skipped} skipped (already resolved). "
-            "Worker processes one per cron tick. Check progress with sh_queue_status."
+            "Worker runner runs the worker every minute; one keyword per run. Check progress with sh_queue_status."
         ),
     })
 
@@ -632,81 +627,14 @@ def cmd_queue_status() -> None:
     })
 
 
-def cmd_set_worker_interval(json_str: str) -> None:
-    """
-    Configure the LLM worker cron interval and save to config.
-    Returns cron_job_id to update the cron schedule via cron.update.
-    json_str: '{"interval_seconds": 60}'
-
-    Note: OpenClaw cron minimum granularity is 1 minute (* * * * *).
-    The interval_seconds is stored in config for reference.
-    Recommended: * * * * * (every minute).
-    """
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        _err(f"Invalid JSON: {e}")
-        return
-
-    interval_seconds = int(data.get("interval_seconds", 60))
-
-    cm = _make_config_manager()
-    config = cm.load()
-    config.setdefault("worker", {})["interval_seconds"] = interval_seconds
-    cm.save(config)
-
-    _out({
-        "status": "ok",
-        "interval_seconds": interval_seconds,
-        "cron_job_id": _SH_WORKER_CRON_JOB_ID,
-        "note": (
-            f"Worker interval set to {interval_seconds}s (stored in config). "
-            f"To create or update the worker cron job, call cron.update with "
-            f"jobId='{_SH_WORKER_CRON_JOB_ID}', "
-            f"name='Signal Hunter - LLM Worker', "
-            f"message='Run sh_worker to process next LLM task. "
-            f"Report: what was processed, or say queue is idle/busy.' "
-            f"and patch.schedule. "
-            f"Recommended: {{\"kind\": \"cron\", \"expr\": \"* * * * *\"}} (every minute)."
-        ),
-    })
-
-
-def cmd_set_embed_worker_interval(json_str: str = "{}") -> None:
-    """
-    Return the cron_job_id for the embed worker cron so it can be created/updated.
-    json_str: '{}' (no config needed - embed worker has no configurable interval)
-
-    The embed worker runs independently from the LLM worker.
-    Recommended interval: every minute (* * * * *).
-    """
-    _out({
-        "status": "ok",
-        "cron_job_id": _SH_EMBED_WORKER_CRON_JOB_ID,
-        "note": (
-            "To create or update the embed worker cron job, call cron.update with "
-            f"jobId='{_SH_EMBED_WORKER_CRON_JOB_ID}', "
-            "name='Signal Hunter - Embed Worker', "
-            "message='Run sh_embed_worker to classify pending signals. "
-            "Report: classified count, remaining.' "
-            "and patch.schedule. "
-            "Recommended: {\"kind\": \"cron\", \"expr\": \"* * * * *\"} (every minute)."
-        ),
-    })
-
-
 def cmd_set_embed_schedule(json_str: str) -> None:
     """
-    Configure embedding schedule parameters.
+    Configure how many signals to embed per embed run (used by worker runner and manual embed).
     json_str: '{"max_items_per_run": 128}'
 
-    max_items_per_run: max signals to embed per cron run (default 128).
+    max_items_per_run: max signals to embed per run (default 128).
       - Each item takes ~50-100ms on CPU with bge-m3 service.
-      - 128 items per run = ~10-15s, safe for any timeout.
-      - Set higher (e.g. 512) to drain the queue faster if many items accumulated.
-
-    The cron interval is managed via OpenClaw's cron.update using the returned cron_job_id.
-    Recommended interval: every 10 minutes (*/10 * * * *).
+      - 128 items per run = ~10-15s. Set higher (e.g. 512) to drain the queue faster.
     """
     try:
         data = json.loads(json_str)
@@ -725,14 +653,7 @@ def cmd_set_embed_schedule(json_str: str) -> None:
     _out({
         "status": "ok",
         "max_items_per_run": max_items_per_run,
-        "cron_job_id": _SH_EMBED_CRON_JOB_ID,
-        "note": (
-            f"Config saved: {max_items_per_run} signals per embed run. "
-            f"To create or update the embed cron job, call cron.update with "
-            f"jobId='{_SH_EMBED_CRON_JOB_ID}', message='Run sh_embed to vectorize pending signals.' "
-            f"and patch.schedule (e.g. {{\"kind\": \"cron\", \"expr\": \"*/10 * * * *\"}}). "
-            f"Recommended: */10 * * * * (every 10 min) with max_items_per_run=128."
-        ),
+        "message": f"Config saved: max_items_per_run={max_items_per_run}",
     })
 
 
@@ -824,7 +745,7 @@ def cmd_approve_report_template(json_str: str = "") -> None:
 
 def cmd_set_workers_paused(json_str: str) -> None:
     """
-    Pause or resume collect + LLM workers without removing cron jobs.
+    Pause or resume collect + LLM workers without stopping the worker runner.
     json_str: '{"paused": true}' or '{"paused": false}'
 
     When paused=true:
@@ -850,7 +771,7 @@ def cmd_set_workers_paused(json_str: str) -> None:
             f"Collection and LLM workers are now {status}. "
             f"Embed worker (reclassifier) continues normally."
             if paused else
-            f"All workers resumed. Collection and LLM processing will restart on next cron tick."
+            f"All workers resumed. Collection and LLM processing will restart on next worker runner tick."
         ),
     })
 
@@ -952,10 +873,8 @@ COMMANDS: dict[str, tuple[Any, bool]] = {
     "set_routing":              (cmd_set_routing, True),
     "run_worker":               (cmd_run_worker, False),
     "run_embed_worker":         (cmd_run_embed_worker, False),
-    "set_embed_worker_interval": (cmd_set_embed_worker_interval, False),
     "queue_resolve":            (cmd_queue_resolve, True),
     "queue_status":             (cmd_queue_status, False),
-    "set_worker_interval":      (cmd_set_worker_interval, True),
     "delete_keywords":          (cmd_delete_keywords, True),
     "retry_failed":             (cmd_retry_failed, False),
     "set_embed_schedule":       (cmd_set_embed_schedule, True),

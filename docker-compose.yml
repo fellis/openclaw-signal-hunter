@@ -89,6 +89,25 @@ services:
       retries: 5
       start_period: 30s
 
+  signal-hunter-workers:
+    build:
+      context: .
+      dockerfile: docker/workers.Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./config.json:/app/config.json:ro
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://signal:signal@postgres:5432/signal_hunter
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDER_URL=http://embedder:6335
+      - TRANSLATOR_URL=https://llm.aegisalpha.io/translator
 
 volumes:
   pgdata:

@@ -10,7 +10,7 @@ You type a keyword ("RAG", "ollama", "LangChain") in chat. Signal Hunter:
 
 1. **Discovers** where the topic is discussed (repos, subreddits, HF models, SO tags) via real API calls - no LLM guessing
 2. **Proposes a collection plan** - which repos/subreddits/models to monitor, enriched with LLM-suggested aliases and search queries
-3. **Collects automatically** - every 24h per keyword via a dedicated Collect Worker cron (GitHub, HF, HN, SO, Reddit), expanding the plan with newly appeared repos/spaces on each run
+3. **Collects automatically** - every 24h per keyword via the Collect Worker (worker runner, every 5 min; GitHub, HF, HN, SO, Reddit), expanding the plan with newly appeared repos/spaces on each run
 4. **Classifies** every signal using embedding cosine similarity against a universal set of signal-type rules (pain_point, feature_request, bug_report, adoption_signal, comparison, use_case, pricing_concern, positive_feedback, market_observation, security_concern). Supports per-rule thresholds and negative anchor penalty. Fast local inference, no GPU required for classify. LLM generates a short summary only for relevant signals
 5. **Embeds** relevant signals into Qdrant with `bge-m3` via a persistent Docker service (always warm, no per-request model load)
 6. **Answers questions** in natural language: "what are the top complaints about RAG retrieval this month?"
@@ -57,7 +57,7 @@ skill/main.py         ← CLI dispatcher
      ├── core/embed_processor.py ← embedding-based classify; domain pre-filter (positive/negative anchors)
      │                              then rule matching; borderline signals → llm_task_queue for LLM
      │                              universal signal-type rules; neg_weight, neg_min_sim; strip_hn_prefix
-     ├── core/embed_worker.py    ← embed worker: runs EmbedProcessor per cron tick
+     ├── core/embed_worker.py    ← embed worker: runs EmbedProcessor per worker runner tick
      ├── core/embedder.py        ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py      ← routes ops to local/Claude by config
      ├── core/llm_worker.py      ← LLM task queue: resolve + borderline_relevance + summarize_batch
@@ -109,14 +109,14 @@ External services (not in docker-compose):
 - Business logic stays in Python; TypeScript only handles IPC
 - Discovery-first: LLM enriches only facts confirmed by API calls, never guesses
 - **LLM Task Queue:** all LLM calls go through `llm_task_queue` - one task at a time, no GPU contention. Priority: resolve(50) > borderline_relevance(70) > summarize_batch(90)
-- **Four separate cron jobs:** Embed Worker (every minute) classifies via embeddings: domain pre-filter (auto-accept/reject/borderline), borderline enqueued for LLM; LLM Worker (every minute) handles resolve + borderline_relevance + summarize + translate; Collect Worker (every 5 min); Auto Embed (every minute) vectorizes into Qdrant via `embedder-vectorizer:6336`
+- **Worker runner (one process):** Embed Worker (every minute), LLM Worker (every minute), Collect Worker (every 5 min), Auto Embed (every minute) run from a single container/script. Embed Worker classifies via embeddings (domain pre-filter, borderline enqueued for LLM); LLM Worker handles resolve + borderline_relevance + summarize + translate; Auto Embed vectorizes into Qdrant via `embedder-vectorizer:6336`
 - **Auto-discovery of new sources:** GitHub and HuggingFace collectors extend plans with newly appeared repos/spaces (`discover_new_sources`) on each collect cycle - no manual re-resolve needed
 - **Daily collection per keyword:** Collect Worker locks each keyword with `last_collected_at = now()` before collecting; re-triggers only after 24h; stalest keywords first
 - Outbox pattern for embedding queue (PostgreSQL → Qdrant, crash-safe)
 - Embedder runs as a persistent Docker service: model loads once at startup, all encode calls go via HTTP - no per-run model reload overhead
 - Anti-hallucination gate on query answers: URLs not in source data are stripped
 - `config.json` is excluded from git - live rules and credentials survive `git pull`
-- flock-based process lock prevents parallel cron runs from duplicating work
+- Lock file prevents duplicate worker runner instances
 
 ---
 
@@ -398,12 +398,12 @@ Rules are stored in `config.json` under `extraction_rules` (or loaded from `univ
 
 ### Step 6 - Classify and embed
 
-Classification is fully automatic: Embed Worker (cron every minute) runs domain pre-filter + rule matching; borderline signals are enqueued for LLM Worker, which decides relevance and enqueues summarize. No manual "process" step.
+Classification is fully automatic: Embed Worker (worker runner, every minute) runs domain pre-filter + rule matching; borderline signals are enqueued for LLM Worker, which decides relevance and enqueues summarize. No manual "process" step.
 
 - **Embed Worker:** domain score (positive/negative anchors) → auto-accept, auto-reject, or borderline → LLM task queue.
 - **LLM Worker:** borderline_relevance (v6 prompt), then summarize_batch for relevant signals.
 
-Embedding into Qdrant happens automatically via the Auto Embed cron (every minute). To run immediately:
+Embedding into Qdrant happens automatically via the Auto Embed loop (worker runner, every minute). To run immediately:
 
 ```
 You: embed
@@ -493,20 +493,20 @@ The UI has three main sections:
 
 **Language toggle (EN / RU):** Switch between English (original content) and Russian (machine-translated by MADLAD-400-3B). The toggle is in the sidebar. The selected language is persisted across sessions. Signals that have been translated show the language badge in the title row. Untranslated signals (translation still pending or worker not configured) fall back to the original English.
 
-The translation worker runs as part of the LLM Worker cron tick - no separate container or cron needed.
+The translation worker runs as part of the LLM Worker tick (same runner) - no separate container needed.
 
 ---
 
-### Step 10 - Automation (cron)
+### Step 10 - Automation (worker runner)
 
-Four cron jobs run continuously and independently:
+Workers run from a single process (container `signal-hunter-workers` or script `scripts/run_workers.sh`). At startup a lock file prevents duplicate instances; for development, restart the container or process manually.
 
-| Cron | Schedule | What it does |
+| Command | Interval | What it does |
 |---|---|---|
-| **LLM Worker** | `* * * * *` (every 1 min) | resolve keywords + summarize_batch (LLM) + translate batch (MADLAD-400) |
-| **Embed Worker** | `* * * * *` (every 1 min) | classify raw signals via embeddings (no LLM, no GPU) |
-| **Collect Worker** | `*/5 * * * *` (every 5 min) | picks 1 stalest keyword, fetches signals (no LLM) |
-| **Embed** | `*/10 * * * *` (every 10 min) | vectorizes summarized signals into Qdrant |
+| **run_worker** | 60 s | resolve keywords + summarize_batch (LLM) + translate batch (MADLAD-400) |
+| **run_embed_worker** | 60 s | classify raw signals via embeddings (no LLM, no GPU) |
+| **run_collect_worker** | 300 s | picks 1 stalest keyword, fetches signals (no LLM) |
+| **embed** | 60 s | vectorizes summarized signals into Qdrant |
 
 LLM Worker task priorities (sequential, one at a time):
 - `resolve` (priority 50) - keyword enrichment + auto-approved collection plan
@@ -537,15 +537,13 @@ Translate Worker per LLM Worker tick (runs after task queue is drained):
 - Upserts `(signal_id, lang, field, text)` rows into `signal_translations`
 - Returns `{status, translated, rows_stored, remaining}` (logged by LLM Worker)
 
-All cron jobs run silently (`delivery.mode: none`) - no Telegram noise.
-
 **Full automated lifecycle after adding a keyword:**
 ```
 queue_resolve → resolve (LLM, ~1 min) → auto-approved plan
              → Collect Worker picks it (daily, 90d backfill on first run, incremental after)
              → Embed Worker classifies instantly (no LLM) → summary=null
              → LLM Worker summarize_batch → adds to embedding_queue
-             → Embed cron (every 10 min) → Qdrant
+             → Auto Embed (worker runner, every 1 min) → Qdrant
              → LLM Worker translate_worker → signal_translations (EN→RU or other)
              → GitHub/HF plan auto-expanded with new repos on each collect
 ```
@@ -603,14 +601,13 @@ Or via slash command: `/sh embedder [status|start|stop|restart|logs|build]`
 | `refresh_profile <keyword>` | Re-run discovery, update cached profile |
 | `list_keywords` | List all tracked keywords |
 | `delete_keywords <json>` | Delete keywords and their plans `{"keywords": [...]}` (confirm first) |
-| `run_worker` | Process LLM task queue - resolve + summarize_batch (cron every 1 min) |
-| `run_embed_worker` | Classify raw signals via embeddings - no LLM (cron every 1 min) |
-| `run_collect_worker` | Collect signals for the stalest keyword (cron every 5 min) |
+| `run_worker` | Process LLM task queue - resolve + summarize_batch (worker runner, 1 min) |
+| `run_embed_worker` | Classify raw signals via embeddings - no LLM (worker runner, 1 min) |
+| `run_collect_worker` | Collect signals for the stalest keyword (worker runner, 5 min) |
 | `queue_status` | Show LLM task queue: pending / running / failed |
-| `set_worker_interval <json>` | Configure worker cron interval `{"interval_seconds": 60}` |
 | `retry_failed` | Reset all failed LLM tasks back to pending |
-| `embed` | Vectorize pending signals into Qdrant (runs automatically via cron) |
-| `set_embed_schedule <json>` | Configure max items per embed cron run |
+| `embed` | Vectorize pending signals into Qdrant (worker runner or manual) |
+| `set_embed_schedule <json>` | Configure max items per embed run `{"max_items_per_run": 128}` |
 | `reprocess <json>` | Delete and reclassify signals for a keyword (Embed Worker re-runs on next tick) |
 | `embedder_service <json>` | Manage embedder Docker container (status/start/stop/restart/logs/build) |
 | `query <prompt>` | Semantic search + LLM synthesis |
@@ -702,7 +699,7 @@ Key sections:
 - `embed_batch_size: 32` - signals per embedder HTTP call during classify.
 - `summary_batch_size: 5` - relevant signals per LLM call in summarize_batch worker.
 - `batch_size: 50` - raw signals fetched per Embed Worker batch.
-- `max_batches_per_run: 5` - max batches the Embed Worker processes per cron tick (50 × 5 = 250 signals/min max).
+- `max_batches_per_run: 5` - max batches the Embed Worker processes per run (50 × 5 = 250 signals/min max).
 
 **`hybrid_relevance`** (domain pre-filter + LLM for borderline):
 - `enabled: true` - use domain score (positive/negative anchors) before rule matching; signals between `domain_low` and `domain_high` go to LLM (borderline_relevance task).
@@ -712,7 +709,7 @@ Key sections:
 
 **`embedder` settings explained:**
 - `service_url` - HTTP endpoint used by Embed Worker (classify) and `signal_hunter_query`. If unreachable, falls back to loading bge-m3 locally.
-- `max_items_per_run: 128` - signals to embed per cron run. At ~100ms/signal with the service: 128 × 100ms ≈ 13s per run.
+- `max_items_per_run: 128` - signals to embed per run. At ~100ms/signal with the service: 128 × 100ms ≈ 13s per run.
 
 **`embedder_vectorizer` settings explained:**
 - `service_url` - dedicated endpoint for Auto Embed (Qdrant upserts). Points to `embedder-vectorizer` container on port 6336. Separating classification and vectorization prevents them from competing for the same HTTP service under load.
@@ -828,70 +825,9 @@ In Qdrant queries: `combined_score = rank_score * similarity`.
 
 ## Troubleshooting
 
-### Embed Worker cron always skipped (`lastStatus: "skipped"`)
+### Embedding queue not shrinking
 
-**Symptom:** Raw signals accumulate unprocessed. `~/.openclaw/cron/jobs.json` shows the Embed Worker with `lastStatus: "skipped"`, sometimes with `lastError: "empty-heartbeat-file"`.
-
-**Root cause:** The Embed Worker cron was created with `sessionTarget: "main"`. With that setting OpenClaw checks the agent's `HEARTBEAT.md` file before triggering the job. The heartbeat file is intentionally empty ("keep empty to skip heartbeat calls"), so OpenClaw treats the session as inactive and skips the job every time.
-
-**Fix:** Open `~/.openclaw/cron/jobs.json` and find the job with `"name": "Signal Hunter - Embed Worker"`. Set it to:
-
-```json
-{
-  "sessionTarget": "isolated",
-  "payload": {
-    "kind": "agentTurn",
-    "message": "Run signal_hunter_run_embed_worker to classify pending signals. Report briefly: how many classified, how many remaining."
-  },
-  "delivery": { "mode": "none" }
-}
-```
-
-Then restart the OpenClaw container. The worker will create a fresh isolated session on each cron tick - no heartbeat dependency.
-
-**Correct configuration for all Signal Hunter cron jobs:**
-
-| Job | sessionTarget | payload.kind | delivery.mode |
-|---|---|---|---|
-| Embed Worker | `isolated` | `agentTurn` | `none` |
-| LLM Worker | `isolated` | `agentTurn` | `none` |
-| Collect Worker | `isolated` | `agentTurn` | `none` |
-| Auto Embed | `isolated` | `agentTurn` | `none` |
-
-> The translation worker does not have its own cron. It runs inside each LLM Worker tick after the task queue is drained.
-
-> Note: OpenClaw may overwrite `delivery.mode` back to `"announce"` after the first cron run. If skipping resumes, re-apply the fix.
-
-### Auto Embed cron runs but nothing gets vectorized
-
-**Symptom:** `embedding_queue` does not shrink despite Auto Embed cron firing every minute. Logs show `embed_pending` running but `pending` count stays the same.
-
-**Root cause:** Two possible causes, often both present together:
-
-1. **Wrong tool name in cron message.** If `payload.message` in `cron/jobs.json` says something like `"Run sh_embed..."` instead of the exact tool name `signal_hunter_embed`, the LLM agent does not recognize which tool to call and may no-op.
-
-2. **Tool description discourages cron calls.** If `signal_hunter_embed` in `src/tools.ts` contains text like `"Call this manually ONLY if user explicitly asks"`, the agent interprets cron-triggered messages as non-qualifying and suppresses the call.
-
-**Fix:**
-
-In `~/.openclaw/cron/jobs.json` for "Signal Hunter - Auto Embed":
-```json
-{
-  "payload": {
-    "message": "Run **signal_hunter_embed** to vectorize pending signals into Qdrant. Report briefly: how many vectors indexed."
-  }
-}
-```
-
-In `src/tools.ts`, ensure the `signal_hunter_embed` description starts with:
-```typescript
-'CRON TRIGGER: call this tool when the cron message says "signal_hunter_embed". ' +
-'Also triggered manually by: "embed now", "update vector index now", "index signals immediately".'
-```
-
-Restart the `openclaw-gateway` container after changing `tools.ts` so the plugin reloads with the updated tool definition.
-
----
+If `embedding_queue` does not shrink: ensure the worker runner container is running (`docker compose ps signal-hunter-workers`) and check its logs (`docker compose logs -f signal-hunter-workers`). The runner calls `embed` every minute; OpenClaw cron is not used for Signal Hunter workers.
 
 ### Keyword resolve tasks stuck in `failed` with `Internal Server Error`
 

@@ -164,9 +164,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       name: 'signal_hunter_embed',
       description:
         'Vectorize pending relevant signals with bge-m3 and index into Qdrant. ' +
-        'NOTE: embedding runs automatically via cron every 10 minutes. ' +
-        'Call this manually ONLY if user explicitly asks to embed right now, ' +
-        'or needs search to work immediately without waiting for cron. ' +
+        'Run by the worker runner every minute (or on demand). Call manually for immediate index update. ' +
         'Triggers: "embed now", "update vector index now", "index signals immediately".',
       parameters: { type: 'object', properties: {} },
       async execute() {
@@ -433,7 +431,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
       name: 'signal_hunter_queue_resolve',
       description:
         'Add a list of keywords to the LLM task queue for background resolve and auto-approve. ' +
-        'The worker processes one keyword per cron tick (every minute). ' +
+        'The worker runner runs the worker every minute; one keyword per run. ' +
         'Keywords that already have a profile are skipped automatically. ' +
         'Use this instead of signal_hunter_resolve when adding many keywords at once. ' +
         'Triggers: "добавь ключевики в очередь", "поставь в очередь resolve", ' +
@@ -465,17 +463,16 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
             // ----------------------------------------------------------------
-    // LLM Worker - run worker (called by cron)
+    // LLM Worker - run worker (called by worker runner or manually)
     // ----------------------------------------------------------------
     {
       name: 'signal_hunter_run_worker',
       description:
         'Process the next pending LLM task (resolve or summarize_batch). ' +
-        'Called automatically by the worker cron every minute. ' +
+        'Called by worker runner every minute or manually. ' +
         'Picks the highest-priority pending task, executes it, and reports the result. ' +
         'If queue is empty or another task is already running, exits immediately. ' +
-        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_worker". ' +
-        'User triggers: "запусти воркер", "run worker", "обработай следующую задачу из очереди".',
+        'User triggers: "run worker", "запусти воркер", "обработай следующую задачу из очереди".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'run_worker');
@@ -489,7 +486,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // Embed Worker - classify signals via embeddings (called by cron)
+    // Embed Worker - classify signals via embeddings (called by worker runner or manually)
     // ----------------------------------------------------------------
     {
       name: 'signal_hunter_run_embed_worker',
@@ -498,9 +495,8 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         'Fetches unprocessed signals, embeds them via local bge-m3 service, ' +
         'classifies by cosine similarity against rule vectors, saves with summary=null. ' +
         'Summaries are generated separately by the LLM worker (summarize_batch). ' +
-        'Called automatically by the embed worker cron every minute. ' +
-        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_embed_worker". ' +
-        'User triggers: "запусти embed воркер", "классифицируй сигналы", "run embed worker".',
+        'Called by worker runner every minute or manually. ' +
+        'User triggers: "run embed worker", "запусти embed воркер", "классифицируй сигналы".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'run_embed_worker');
@@ -514,7 +510,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // Collect Worker - run collect worker (called by separate cron)
+    // Collect Worker - run collect worker (called by worker runner or manually)
     // ----------------------------------------------------------------
     {
       name: 'signal_hunter_run_collect_worker',
@@ -522,9 +518,8 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         'Collect worker: picks the single stalest keyword (not collected in last 24h) ' +
         'and fetches new signals for it from GitHub, Reddit, HN, SO, HuggingFace. ' +
         'No LLM used - pure API calls. Runs independently from the LLM worker. ' +
-        'Called automatically by the collect cron every 5 minutes. ' +
-        'CRON TRIGGER: call this tool when the cron message says "signal_hunter_run_collect_worker". ' +
-        'User triggers: "запусти collect воркер", "собери сигналы", "run collect worker".',
+        'Called by worker runner every 5 min or manually. ' +
+        'User triggers: "run collect worker", "запусти collect воркер", "собери сигналы".',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const result = await runSkillCommand(cfg, 'run_collect_worker');
@@ -597,67 +592,6 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     },
 
     // ----------------------------------------------------------------
-    // LLM Worker - set interval
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_set_worker_interval',
-      description:
-        'Configure the LLM worker cron interval and get the cron_job_id to set the schedule. ' +
-        'The LLM worker handles resolve and summarize_batch tasks (no embedding classification). ' +
-        'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and schedule. ' +
-        'Default: every minute (* * * * *). OpenClaw minimum granularity is 1 minute. ' +
-        'Triggers: "настрой воркер", "измени частоту LLM воркера", ' +
-        '"set worker interval", "configure worker schedule", ' +
-        '"как часто работает воркер", "создай крон для воркера".',
-      parameters: {
-        type: 'object',
-        properties: {
-          interval_seconds: {
-            type: 'number',
-            description: 'Polling interval in seconds (default 60, minimum 60 due to cron granularity)',
-          },
-        },
-        required: [],
-      },
-      async execute(_id, params) {
-        const p = params as { interval_seconds?: number };
-        const json = JSON.stringify({ interval_seconds: p.interval_seconds ?? 60 });
-        const result = await runSkillCommand(cfg, 'set_worker_interval', json);
-        if (!result.success) return text(`Set worker interval failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        return text(
-          `**Worker interval configured:** ${d?.interval_seconds}s\n\n` +
-          `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
-          `${d?.note ?? ''}`
-        );
-      },
-    },
-
-    // ----------------------------------------------------------------
-    // Embed Worker - set cron schedule
-    // ----------------------------------------------------------------
-    {
-      name: 'signal_hunter_set_embed_worker_interval',
-      description:
-        'Get the cron_job_id for the embed worker to create or update its cron schedule. ' +
-        'The embed worker classifies signals via embeddings (no LLM) every minute. ' +
-        'WORKFLOW: 1) call this tool, 2) call cron.update with the returned cron_job_id and schedule. ' +
-        'Triggers: "настрой embed воркер", "создай крон для embed воркера", ' +
-        '"set embed worker schedule", "configure classification cron".',
-      parameters: { type: 'object', properties: {} },
-      async execute() {
-        const result = await runSkillCommand(cfg, 'set_embed_worker_interval');
-        if (!result.success) return text(`Set embed worker interval failed: ${result.error}`);
-        const d = result.data as Record<string, unknown>;
-        return text(
-          `**Embed Worker cron:**\n\n` +
-          `cron_job_id: \`${d?.cron_job_id}\`\n\n` +
-          `${d?.note ?? ''}`
-        );
-      },
-    },
-
-    // ----------------------------------------------------------------
     // Delete keywords
     // ----------------------------------------------------------------
     {
@@ -720,21 +654,15 @@ export function createTools(cfg: RunnerConfig): Tool[] {
     {
       name: 'signal_hunter_set_embed_schedule',
       description:
-        'Configure embedding schedule: how many signals to vectorize per cron run. ' +
-        'After setting, create/update the embed cron job via cron.update. ' +
-        'Recommended: max_items_per_run=128 every 10 minutes. ' +
-        'Triggers: "настрой расписание эмбеддинга", "сколько эмбедить за раз", ' +
-        '"set embed schedule", "how often to embed", "configure embedding cron", ' +
-        '"embed every 10 minutes", "эмбедить каждые 10 минут".',
+        'Configure how many signals to vectorize per embed run (used by worker runner and manual embed). ' +
+        'Triggers: "set embed schedule", "сколько эмбедить за раз", "настрой расписание эмбеддинга".',
       parameters: {
         type: 'object',
         properties: {
           max_items_per_run: {
             type: 'number',
             description:
-              'Max signals to embed per cron run (default 128). ' +
-              '128 items = ~10-15s with bge-m3 service. ' +
-              'Set to 512 to drain large queues faster.',
+              'Max signals to embed per run (default 128). 128 items = ~10-15s with bge-m3. Set to 512 to drain large queues faster.',
           },
         },
         required: [],
@@ -745,11 +673,7 @@ export function createTools(cfg: RunnerConfig): Tool[] {
         const result = await runSkillCommand(cfg, 'set_embed_schedule', json);
         if (!result.success) return text(`Set embed schedule failed: ${result.error}`);
         const d = result.data as Record<string, unknown>;
-        return text(
-          `**Embed schedule configured:**\n` +
-          `max_items_per_run: **${d?.max_items_per_run}**\n\n` +
-          `${d?.note ?? ''}`
-        );
+        return text(String(d?.message ?? `Config saved: max_items_per_run=${d?.max_items_per_run ?? 128}`));
       },
     },
 
