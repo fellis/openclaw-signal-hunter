@@ -73,22 +73,25 @@ function RankBar({ value, max }: { value: number; max: number }) {
   )
 }
 
-function SourcePills({ breakdown }: { breakdown: Record<string, number> }) {
+function SourcePills({ breakdown, singleLine }: { breakdown: Record<string, number>; singleLine?: boolean }) {
+  const entries = Object.entries(breakdown)
+    .filter(([, n]) => n > 0)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5)
   return (
-    <div className="flex flex-wrap gap-1">
-      {Object.entries(breakdown)
-        .filter(([, n]) => n > 0)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 5)
-        .map(([src, n]) => (
-          <span
-            key={src}
-            className="badge text-white"
-            style={{ background: SOURCE_COLORS[src] ?? '#6b7280' }}
-          >
-            {SOURCE_LABELS[src] ?? src}: {n}
-          </span>
-        ))}
+    <div
+      className={singleLine ? 'flex flex-nowrap gap-1 overflow-hidden' : 'flex flex-wrap gap-1'}
+      title={singleLine && entries.length > 0 ? entries.map(([s, n]) => `${SOURCE_LABELS[s] ?? s}: ${n}`).join(', ') : undefined}
+    >
+      {entries.map(([src, n]) => (
+        <span
+          key={src}
+          className="badge text-white shrink-0"
+          style={{ background: SOURCE_COLORS[src] ?? '#6b7280' }}
+        >
+          {SOURCE_LABELS[src] ?? src}: {n}
+        </span>
+      ))}
     </div>
   )
 }
@@ -120,20 +123,22 @@ type SortKey = 'rank_score' | 'avg_rank_score' | 'avg_confidence' | 'count' | 'l
 type SortKeyL3 = 'rank_score' | 'intensity' | 'confidence' | 'score' | 'comments_count' | 'created_at' | 'collected_at'
 
 function SortHeader({
-  label, col, sortBy, sortDir, onSort,
+  label, col, sortBy, sortDir, onSort, alignRight,
 }: {
   label: string
   col: string
   sortBy: string
   sortDir: 'asc' | 'desc'
   onSort: (col: string) => void
+  alignRight?: boolean
 }) {
   const active = sortBy === col
   return (
     <button
       onClick={() => onSort(col)}
       className={cn(
-        'text-left text-2xs font-semibold uppercase tracking-wider transition-colors',
+        'text-2xs font-semibold uppercase tracking-wider transition-colors w-full',
+        alignRight ? 'text-right' : 'text-left',
         active ? '' : 'opacity-60 hover:opacity-100',
       )}
       style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}
@@ -208,30 +213,32 @@ function SignalRow({ signal, lang = 'en' }: { signal: Signal; lang?: string }) {
           </div>
         </div>
       </td>
-      <td className="pr-4 py-2.5">
+      <td className="pr-4 py-2.5 align-middle">
         <span className="badge" style={{ background: `${SOURCE_COLORS[signal.source] ?? '#6b7280'}20`, color: SOURCE_COLORS[signal.source] ?? '#6b7280' }}>
           {SOURCE_LABELS[signal.source] ?? signal.source}
         </span>
       </td>
-        <td className="pr-4 py-2.5">
+      <td className="pr-4 py-2.5 align-middle">
+        <div className="flex justify-end">
           <RankBar value={signal.rank_score} max={1} />
-        </td>
-      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+        </div>
+      </td>
+      <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
         {intensityLabel(signal.intensity)}
       </td>
-      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+      <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
         {(signal.confidence * 100).toFixed(0)}%
       </td>
-      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+      <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
         {signal.score}
       </td>
-      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+      <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
         {signal.comments_count}
       </td>
-      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+      <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
         {formatRelative(signal.created_at)}
       </td>
-      <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+      <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
         {formatRelative(signal.collected_at)}
       </td>
     </tr>
@@ -291,7 +298,7 @@ function ClusterRow({
         style={{ borderColor: 'var(--border)' }}
         onClick={expand}
       >
-        <td className="pl-10 pr-3 py-2.5 w-0" style={{ minHeight: 40 }}>
+        <td className="pl-10 pr-3 py-2.5" style={{ minHeight: 40 }}>
           <ChevronRight
             size={13}
             className="transition-transform"
@@ -309,24 +316,29 @@ function ClusterRow({
             {loading && <Loader2 size={11} className="animate-spin shrink-0" style={{ color: 'var(--text-muted)' }} />}
           </div>
         </td>
-        <td className="pr-4 py-2.5">
-          <SourcePills breakdown={cluster.sources_breakdown} />
+        <td className="pr-4 py-2.5 align-middle">
+          <SourcePills breakdown={cluster.sources_breakdown} singleLine />
         </td>
-        <td className="pr-4 py-2.5">
-          <RankBar value={cluster.rank_score} max={maxRankScore} />
+        <td className="pr-4 py-2.5 align-middle">
+          <div className="flex justify-end">
+            <RankBar value={cluster.rank_score} max={maxRankScore} />
+          </div>
         </td>
-        <td className="pr-4 py-2.5" />
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+        <td className="pr-4 py-2.5 align-middle" />
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
           {(cluster.avg_confidence * 100).toFixed(0)}%
         </td>
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
           {cluster.avg_score.toFixed(0)}
         </td>
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
           {cluster.avg_comments.toFixed(0)}
         </td>
-        <td className="pr-4 py-2.5" />
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-2.5 align-middle" />
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+          {formatRelative(cluster.last_signal_at)}
+        </td>
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(cluster.last_signal_at)}
         </td>
       </tr>
@@ -396,7 +408,7 @@ function CategoryRow({
         style={{ borderColor: 'var(--border)' }}
         onClick={expand}
       >
-        <td className="pl-4 pr-3 py-2.5 w-0" style={{ minHeight: 40 }}>
+        <td className="pl-4 pr-3 py-2.5" style={{ minHeight: 40 }}>
           <ChevronRight
             size={13}
             className="transition-transform"
@@ -412,24 +424,29 @@ function CategoryRow({
             {loading && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
           </div>
         </td>
-        <td className="pr-4 py-2.5">
-          <SourcePills breakdown={category.sources_breakdown} />
+        <td className="pr-4 py-2.5 align-middle">
+          <SourcePills breakdown={category.sources_breakdown} singleLine />
         </td>
-        <td className="pr-4 py-2.5">
-          <RankBar value={category.rank_score} max={maxRankScore} />
+        <td className="pr-4 py-2.5 align-middle">
+          <div className="flex justify-end">
+            <RankBar value={category.rank_score} max={maxRankScore} />
+          </div>
         </td>
-        <td className="pr-4 py-2.5" />
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
+        <td className="pr-4 py-2.5 align-middle" />
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
           {(category.avg_confidence * 100).toFixed(0)}%
         </td>
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
           {category.avg_score.toFixed(0)}
         </td>
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-2)' }}>
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
           {category.avg_comments.toFixed(0)}
         </td>
-        <td className="pr-4 py-2.5" />
-        <td className="pr-4 py-2.5 text-xs tabular-nums" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-2.5 align-middle" />
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+          {formatRelative(category.last_signal_at)}
+        </td>
+        <td className="pr-4 py-2.5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(category.last_signal_at)}
         </td>
       </tr>
@@ -493,6 +510,9 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
     background: 'var(--bg-2)',
     zIndex: 10,
     borderBottom: '1px solid var(--border)',
+    paddingTop: 10,
+    paddingBottom: 10,
+    verticalAlign: 'middle',
   }
 
   return (
@@ -501,53 +521,53 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
         <colgroup>
           <col style={{ width: 32 }} />
           <col style={{ width: 'min(380px, 32%)' }} />
-          <col style={{ width: 140 }} />
-          <col style={{ width: 90 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 88 }} />
-          <col style={{ width: 88 }} />
+          <col style={{ width: 150 }} />
+          <col style={{ width: 100 }} />
+          <col style={{ width: 76 }} />
+          <col style={{ width: 76 }} />
+          <col style={{ width: 76 }} />
+          <col style={{ width: 76 }} />
+          <col style={{ width: 76 }} />
+          <col style={{ width: 92 }} />
+          <col style={{ width: 92 }} />
         </colgroup>
         <thead>
           <tr>
-            <th className="w-0 pl-4 py-2.5" style={thStyle} />
-            <th className="text-left pl-0 pr-4 py-2.5" style={thStyle}>
+            <th className="pl-4" style={{ ...thStyle, width: 32 }} />
+            <th className="text-left pl-0 pr-4" style={thStyle}>
               <SortHeader label="Category / Cluster / Signal" col="count" {...colProps} />
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
+            <th className="text-left pr-4" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
                 Sources
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
-              <SortHeader label="Rank Score (Σ)" col="rank_score" {...colProps} />
+            <th className="text-right pr-4" style={thStyle}>
+              <SortHeader label="Rank score" col="rank_score" {...colProps} alignRight />
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
+            <th className="text-right pr-4" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
                 Intensity
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
-              <SortHeader label="Confidence" col="avg_confidence" {...colProps} />
+            <th className="text-right pr-4" style={thStyle}>
+              <SortHeader label="Confidence" col="avg_confidence" {...colProps} alignRight />
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
+            <th className="text-right pr-4" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
-                Avg Score
+                Score
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
+            <th className="text-right pr-4" style={thStyle}>
               <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{ color: 'var(--text-muted)' }}>
-                Avg Comments
+                Comments
               </span>
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
-              <SortHeader label="Created" col="last_signal_at" {...colProps} />
+            <th className="text-right pr-4" style={thStyle}>
+              <SortHeader label="Created" col="last_signal_at" {...colProps} alignRight />
             </th>
-            <th className="text-left pr-4 py-2.5" style={thStyle}>
-              <SortHeader label="Collected" col="last_signal_at" {...colProps} />
+            <th className="text-right pr-4" style={thStyle}>
+              <SortHeader label="Collected" col="last_signal_at" {...colProps} alignRight />
             </th>
           </tr>
         </thead>
