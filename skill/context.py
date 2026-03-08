@@ -35,6 +35,9 @@ class _WorkerFormatter(logging.Formatter):
 def setup_logging() -> None:
     """Configure root logger with worker-tagged format. Called once when skill context is loaded."""
     import os
+    # Single handler only: ensure backend can parse worker from every line (no library default format)
+    for h in list(logging.root.handlers):
+        logging.root.removeHandler(h)
     level = getattr(logging, os.environ.get("LOG_LEVEL", "WARNING").upper(), logging.WARNING)
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(_WorkerFormatter("%(asctime)s %(levelname)s %(worker)s %(name)s: %(message)s"))
