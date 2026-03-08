@@ -25,6 +25,8 @@ TRANSLATOR_URL    = os.environ.get("TRANSLATOR_URL", "https://llm.aegisalpha.io/
 TRANSLATOR_API_KEY = os.environ.get("LOCAL_LLM_API_KEY", "")
 TARGET_LANG       = os.environ.get("TRANSLATE_TARGET_LANG", "ru")
 BATCH_SIZE        = int(os.environ.get("TRANSLATE_BATCH_SIZE", "32"))
+# External translator API limit (e.g. llm.aegisalpha.io: "Batch too large: max 32 texts per request")
+TRANSLATOR_API_MAX_TEXTS = int(os.environ.get("TRANSLATOR_API_MAX_TEXTS", "32"))
 
 
 class TranslateWorker:
@@ -163,37 +165,39 @@ class TranslateWorker:
         if not non_empty:
             return texts[:]
 
-        indices, payloads = zip(*non_empty)
+        result = list(texts)
         headers = {"Content-Type": "application/json"}
         if TRANSLATOR_API_KEY:
             headers["Authorization"] = f"Bearer {TRANSLATOR_API_KEY}"
+        max_per_request = TRANSLATOR_API_MAX_TEXTS
 
-        resp = httpx.post(
-            f"{TRANSLATOR_URL}/translate",
-            json={"texts": list(payloads), "target_lang": TARGET_LANG},
-            headers=headers,
-            timeout=120.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, dict):
-            raise ValueError(f"Translator returned non-JSON object: {type(data)}")
-        translated = data.get("translations")
-        if translated is None:
-            detail = data.get("detail", "")
-            if isinstance(detail, list):
-                detail = "; ".join(str(d) for d in detail)
-            err_msg = (
-                f"Translator returned error (keys: {list(data.keys())!r}). "
-                f"detail={detail!r}"
+        for start in range(0, len(non_empty), max_per_request):
+            chunk = non_empty[start : start + max_per_request]
+            indices, payloads = zip(*chunk)
+            resp = httpx.post(
+                f"{TRANSLATOR_URL}/translate",
+                json={"texts": list(payloads), "target_lang": TARGET_LANG},
+                headers=headers,
+                timeout=120.0,
             )
-            raise ValueError(err_msg)
-        if len(translated) != len(payloads):
-            raise ValueError(
-                f"Translator returned {len(translated)} items, expected {len(payloads)}"
-            )
-
-        result = list(texts)
-        for idx, tr in zip(indices, translated):
-            result[idx] = tr
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError(f"Translator returned non-JSON object: {type(data)}")
+            translated = data.get("translations")
+            if translated is None:
+                detail = data.get("detail", "")
+                if isinstance(detail, list):
+                    detail = "; ".join(str(d) for d in detail)
+                err_msg = (
+                    f"Translator returned error (keys: {list(data.keys())!r}). "
+                    f"detail={detail!r}"
+                )
+                raise ValueError(err_msg)
+            if len(translated) != len(payloads):
+                raise ValueError(
+                    f"Translator returned {len(translated)} items, expected {len(payloads)}"
+                )
+            for idx, tr in zip(indices, translated):
+                result[idx] = tr
         return result
