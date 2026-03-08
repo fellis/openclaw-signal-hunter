@@ -3,8 +3,9 @@ import Sidebar from '@/components/layout/Sidebar'
 import Report from '@/pages/Report'
 import Charts from '@/pages/Charts'
 import Search from '@/pages/Search'
+import WorkersLogs from '@/pages/WorkersLogs'
 
-export type Page = 'report' | 'charts' | 'search'
+export type Page = 'report' | 'charts' | 'search' | 'logs'
 export type Lang = 'en' | 'ru'
 
 export default function App() {
@@ -33,6 +34,7 @@ export default function App() {
         {page === 'report' && <Report lang={lang} />}
         {page === 'charts' && <Charts />}
         {page === 'search' && <Search lang={lang} />}
+        {page === 'logs' && <WorkersLogs />}
       </main>
     </div>
   )

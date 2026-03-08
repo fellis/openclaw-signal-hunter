@@ -1,4 +1,4 @@
-import { BarChart2, Search, Zap, Moon, Sun } from 'lucide-react'
+import { BarChart2, Search, Zap, Moon, Sun, ScrollText } from 'lucide-react'
 import type { Page, Lang } from '@/App'
 import { cn } from '@/lib/utils'
 
@@ -15,6 +15,7 @@ const NAV = [
   { id: 'report' as Page, icon: Zap, label: 'Signals' },
   { id: 'charts' as Page, icon: BarChart2, label: 'Charts' },
   { id: 'search' as Page, icon: Search, label: 'Search' },
+  { id: 'logs' as Page, icon: ScrollText, label: 'Logs' },
 ]
 
 export default function Sidebar({ page, setPage, dark, setDark, lang, setLang }: Props) {

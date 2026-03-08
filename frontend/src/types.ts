@@ -118,3 +118,30 @@ export interface Filters {
   confidence_min: number | null
   confidence_max: number | null
 }
+
+export interface WorkerLogLine {
+  ts: string
+  level: string
+  worker: string
+  message: string
+}
+
+export interface WorkerSchedule {
+  run_worker_interval_sec: number
+  run_embed_worker_interval_sec: number
+  run_collect_worker_interval_sec: number
+  embed_interval_sec: number
+}
+
+export interface WorkerStatusResponse {
+  schedule: WorkerSchedule
+  llm_queue: {
+    pending: number
+    running: number
+    failed: number
+    tasks: Array<{ task_type: string; status: string; payload?: unknown; error?: string; created_at?: string }>
+  }
+  embed_worker: { unprocessed: number; borderline_pending: number }
+  collect_worker: { next_keyword: string | null; last_collected_at: string | null }
+  embed_vectorize: { pending: number }
+}

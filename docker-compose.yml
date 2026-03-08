@@ -67,6 +67,7 @@ services:
       - .env
     volumes:
       - ./config.json:/app/config.json:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     depends_on:
       postgres:
@@ -80,6 +81,8 @@ services:
       - EMBEDDER_URL=http://embedder:6335
       # Translator via llm-api proxy (MADLAD-400-3B on Devstral, 64 EPYC cores)
       - TRANSLATOR_URL=https://llm.aegisalpha.io/translator
+      # Worker logs (optional: set if container name differs)
+      # - WORKER_CONTAINER_NAME=signal-hunter-workers
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/stats || exit 1"]
       interval: 30s
