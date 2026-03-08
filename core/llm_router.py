@@ -13,10 +13,22 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Retry config for transient network errors (DNS, connection reset, server disconnect)
+_LLM_RETRY_ATTEMPTS = 3
+_LLM_RETRY_BACKOFF_SEC = (2.0, 4.0)
+_TRANSIENT_PHRASES = (
+    "name resolution",
+    "Connection reset",
+    "Server disconnected",
+    "Connection refused",
+    "Connection reset by peer",
+)
 
 # Maps substrings in LOCAL_LLM_MODEL to tokenizer factory functions.
 # Add new families here when switching local models.
@@ -64,32 +76,54 @@ class LLMRouter:
     # Public API
     # ------------------------------------------------------------------
 
+    def _is_transient_network_error(self, e: BaseException) -> bool:
+        """True if the error is a transient network/DNS issue worth retrying."""
+        msg = str(e).lower()
+        if any(phrase.lower() in msg for phrase in _TRANSIENT_PHRASES):
+            return True
+        # socket.gaierror (e.g. Errno -3 Temporary failure in name resolution)
+        if type(e).__name__ == "gaierror":
+            return True
+        return False
+
     def complete(self, call: LLMCall) -> str:
         """
         Route call to provider, execute, log usage, return response text.
+        Retries up to _LLM_RETRY_ATTEMPTS on transient network errors (DNS, connection reset).
         Raises RuntimeError on provider misconfiguration.
         """
-        import time
-
         provider = self._routing.get(call.operation, "local")
-        t0 = time.perf_counter()
-        try:
-            if provider == "claude":
-                text = self._call_anthropic(call)
-            elif provider == "local":
-                text = self._call_local(call)
-            else:
-                raise RuntimeError(
-                    f"Unknown provider '{provider}' for operation '{call.operation}'. "
-                    f"Check llm_routing in config.json."
-                )
-        except Exception as e:
-            elapsed = time.perf_counter() - t0
-            self._log_llm_io(call, provider, None, str(e), elapsed)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._log_llm_io(call, provider, text, None, elapsed)
-        return text
+        last_exception = None
+        for attempt in range(1, _LLM_RETRY_ATTEMPTS + 1):
+            t0 = time.perf_counter()
+            try:
+                if provider == "claude":
+                    text = self._call_anthropic(call)
+                elif provider == "local":
+                    text = self._call_local(call)
+                else:
+                    raise RuntimeError(
+                        f"Unknown provider '{provider}' for operation '{call.operation}'. "
+                        f"Check llm_routing in config.json."
+                    )
+                elapsed = time.perf_counter() - t0
+                self._log_llm_io(call, provider, text, None, elapsed)
+                return text
+            except Exception as e:
+                last_exception = e
+                elapsed = time.perf_counter() - t0
+                self._log_llm_io(call, provider, None, str(e), elapsed)
+                if attempt < _LLM_RETRY_ATTEMPTS and self._is_transient_network_error(e):
+                    backoff = _LLM_RETRY_BACKOFF_SEC[attempt - 1]
+                    log.warning(
+                        "[LLM] op=%s attempt=%d/%d transient error, retrying in %.1fs: %s",
+                        call.operation, attempt, _LLM_RETRY_ATTEMPTS, backoff, e,
+                    )
+                    time.sleep(backoff)
+                else:
+                    raise
+        assert last_exception is not None
+        raise last_exception
 
     def _log_llm_io(
         self,
