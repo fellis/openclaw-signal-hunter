@@ -298,14 +298,14 @@ function ClusterRow({
         style={{ borderColor: 'var(--border)' }}
         onClick={expand}
       >
-        <td className="pl-10 pr-3 py-5" style={{ minHeight: 80 }}>
+        <td className="pl-10 pr-3 py-3" style={{ minHeight: 48 }}>
           <ChevronRight
             size={13}
             className="transition-transform"
             style={{ color: 'var(--text-muted)', transform: expanded ? 'rotate(90deg)' : undefined }}
           />
         </td>
-        <td className="pr-4 py-5" style={{ minHeight: 80 }}>
+        <td className="pr-4 py-3" style={{ minHeight: 48 }}>
           <div className="flex items-center gap-2 min-w-0">
             <Tooltip text={cluster.name}>
               <span className="font-medium text-xs truncate" style={{ color: 'var(--text-2)' }}>
@@ -316,29 +316,29 @@ function ClusterRow({
             {loading && <Loader2 size={11} className="animate-spin shrink-0" style={{ color: 'var(--text-muted)' }} />}
           </div>
         </td>
-        <td className="pr-4 py-5 align-middle">
+        <td className="pr-4 py-3 align-middle">
           <SourcePills breakdown={cluster.sources_breakdown} singleLine />
         </td>
-        <td className="pr-4 py-5 align-middle">
+        <td className="pr-4 py-3 align-middle">
           <div className="flex justify-end">
             <RankBar value={cluster.rank_score} max={maxRankScore} />
           </div>
         </td>
-        <td className="pr-4 py-5 align-middle" />
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
+        <td className="pr-4 py-3 align-middle" />
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
           {(cluster.avg_confidence * 100).toFixed(0)}%
         </td>
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
           {cluster.avg_score.toFixed(0)}
         </td>
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)' }}>
           {cluster.avg_comments.toFixed(0)}
         </td>
-        <td className="pr-4 py-5 align-middle" />
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-3 align-middle" />
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(cluster.last_signal_at)}
         </td>
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(cluster.last_signal_at)}
         </td>
       </tr>
@@ -408,14 +408,14 @@ function CategoryRow({
         style={{ borderColor: 'var(--border)' }}
         onClick={expand}
       >
-        <td className="pl-4 pr-3 py-5" style={{ minHeight: 80 }}>
+        <td className="pl-4 pr-3 py-3" style={{ minHeight: 48 }}>
           <ChevronRight
             size={13}
             className="transition-transform"
             style={{ color: 'var(--text-muted)', transform: expanded ? 'rotate(90deg)' : undefined }}
           />
         </td>
-        <td className="pr-4 py-5" style={{ minHeight: 80 }}>
+        <td className="pr-4 py-3" style={{ minHeight: 48 }}>
           <div className="flex items-center gap-2">
             <CategoryBadge name={category.name} rules={rules} />
             <span className="text-2xs font-medium" style={{ color: 'var(--text-muted)' }}>
@@ -424,29 +424,29 @@ function CategoryRow({
             {loading && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
           </div>
         </td>
-        <td className="pr-4 py-5 align-middle">
+        <td className="pr-4 py-3 align-middle">
           <SourcePills breakdown={category.sources_breakdown} singleLine />
         </td>
-        <td className="pr-4 py-5 align-middle">
+        <td className="pr-4 py-3 align-middle">
           <div className="flex justify-end">
             <RankBar value={category.rank_score} max={maxRankScore} />
           </div>
         </td>
-        <td className="pr-4 py-5 align-middle" />
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
+        <td className="pr-4 py-3 align-middle" />
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
           {(category.avg_confidence * 100).toFixed(0)}%
         </td>
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
           {category.avg_score.toFixed(0)}
         </td>
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-2)' }}>
           {category.avg_comments.toFixed(0)}
         </td>
-        <td className="pr-4 py-5 align-middle" />
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-3 align-middle" />
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(category.last_signal_at)}
         </td>
-        <td className="pr-4 py-5 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        <td className="pr-4 py-3 text-xs tabular-nums text-right align-middle" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {formatRelative(category.last_signal_at)}
         </td>
       </tr>
