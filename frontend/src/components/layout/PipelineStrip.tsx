@@ -130,13 +130,13 @@ interface PipelineStripProps {
 }
 
 function hoursUntilNextCollect(lastCollectedAt: string | null): string {
-  if (!lastCollectedAt) return 'ещё не собирался'
+  if (!lastCollectedAt) return 'never collected'
   const last = new Date(lastCollectedAt).getTime()
   const now = Date.now()
   const hoursSince = (now - last) / (1000 * 60 * 60)
   const hoursLeft = Math.max(0, 24 - hoursSince)
-  if (hoursLeft <= 0) return 'через 0 ч'
-  return `через ${Math.round(hoursLeft)} ч`
+  if (hoursLeft <= 0) return 'in 0 h'
+  return `in ${Math.round(hoursLeft)} h`
 }
 
 export default function PipelineStrip({ stats, totalSignals }: PipelineStripProps) {
@@ -275,7 +275,7 @@ export default function PipelineStrip({ stats, totalSignals }: PipelineStripProp
           {stats.keywords_run_24h ?? 0} / {stats.keywords_total ?? 0}
         </div>
         <div className="text-2xs leading-tight" style={{ color: 'var(--text-muted)', minHeight: 14 }}>
-          обработано за 24ч
+          collected in last 24h
         </div>
         {stats.keywords_total ? (
           <div className="mt-1 rounded-full overflow-hidden" style={{ height: 3, background: 'var(--border)' }}>
@@ -296,7 +296,7 @@ export default function PipelineStrip({ stats, totalSignals }: PipelineStripProp
         index={2}
         label="Collect"
         value={`+${stats.new_signals_24h?.toLocaleString() ?? 0}`}
-        sub={`новых за 24ч · всего ${stats.raw_total?.toLocaleString() ?? 0}`}
+        sub={`new in 24h · total ${stats.raw_total?.toLocaleString() ?? 0}`}
       />
       <PipelineArrow />
       <PipelineStageClassify
@@ -312,7 +312,7 @@ export default function PipelineStrip({ stats, totalSignals }: PipelineStripProp
         index={4}
         label="Summarize"
         value={`${stats.summarized_total?.toLocaleString() ?? 0} / ${totalSignals.toLocaleString()}`}
-        sub="с summary"
+        sub="with summary"
         pct={totalSignals > 0 ? ((stats.summarized_total ?? 0) / totalSignals) * 100 : 0}
       />
       <PipelineArrow />
@@ -320,7 +320,7 @@ export default function PipelineStrip({ stats, totalSignals }: PipelineStripProp
         index={5}
         label="Vectorize"
         value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${totalSignals.toLocaleString()}`}
-        sub="в Qdrant"
+        sub="in Qdrant"
         pct={totalSignals > 0 ? ((stats.embedded_total ?? 0) / totalSignals) * 100 : 0}
       />
     </div>
@@ -375,9 +375,9 @@ export default function PipelineStrip({ stats, totalSignals }: PipelineStripProp
                   filtered.map((kw) => {
                     const disabled = kw.in_queue || kw.in_progress
                     const statusText = kw.in_progress
-                      ? 'Сбор идёт'
+                      ? 'Collecting...'
                       : kw.in_queue
-                        ? 'В очереди'
+                        ? 'In queue'
                         : hoursUntilNextCollect(kw.last_collected_at)
                     return (
                       <label
