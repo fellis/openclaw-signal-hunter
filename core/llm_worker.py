@@ -29,7 +29,7 @@ from storage.postgres import PostgresStorage
 
 log = logging.getLogger(__name__)
 
-_MAX_STUCK_MINUTES = 2
+_MAX_STUCK_MINUTES = 1  # recover faster after container/process restart
 _DEFAULT_BUDGET_SECONDS = 50
 
 _LLM_SYSTEM_V6 = (
@@ -202,10 +202,13 @@ class LLMWorker:
                 for t in tasks_batch:
                     if is_transient:
                         self._storage.reset_llm_task_to_pending(t["id"])
-                        log.warning("[llm_worker] transient error, task %s reset to pending (no retry consumed)", t["id"])
+                        log.warning("[llm_worker] transient error, task %s reset to pending (retry not consumed)", t["id"])
                     else:
                         self._storage.fail_llm_task(t["id"], err_str)
                     errors.append({"task_type": t["task_type"], "error": err_str})
+                # Exit this tick so we don't re-claim the same batch and loop. Next tick (60s) will retry.
+                if is_transient:
+                    break
 
         remaining = self._storage.get_llm_queue_status()
         pending_count = sum(1 for t in remaining if t["status"] == "pending")
