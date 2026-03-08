@@ -175,7 +175,19 @@ class TranslateWorker:
             timeout=120.0,
         )
         resp.raise_for_status()
-        translated = resp.json()["translations"]
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"Translator returned non-JSON object: {type(data)}")
+        translated = data.get("translations")
+        if translated is None:
+            raise ValueError(
+                "Translator response missing 'translations' key. "
+                f"Expected {{'translations': [...]}}. Got keys: {list(data.keys())!r}"
+            )
+        if len(translated) != len(payloads):
+            raise ValueError(
+                f"Translator returned {len(translated)} items, expected {len(payloads)}"
+            )
 
         result = list(texts)
         for idx, tr in zip(indices, translated):
