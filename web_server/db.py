@@ -50,3 +50,10 @@ def fetchone(sql: str, params: tuple | list = ()) -> dict[str, Any] | None:
             cur.execute(sql, params)
             row = cur.fetchone()
             return dict(row) if row else None
+
+
+def execute(sql: str, params: tuple | list = ()) -> None:
+    """Execute a statement (e.g. INSERT, UPDATE, DELETE). No return value."""
+    with get_conn() as conn:
+        with dict_cursor(conn) as cur:
+            cur.execute(sql, params)

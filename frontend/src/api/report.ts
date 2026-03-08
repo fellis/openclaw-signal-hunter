@@ -73,6 +73,31 @@ export async function fetchKeywords(): Promise<string[]> {
   return data.keywords || []
 }
 
+export interface KeywordStatus {
+  name: string
+  last_collected_at: string | null
+  in_queue: boolean
+  in_progress: boolean
+}
+
+export async function fetchKeywordsStatus(): Promise<KeywordStatus[]> {
+  const res = await fetch('/api/keywords/status')
+  if (!res.ok) throw new Error('Keywords status fetch failed')
+  const data = await res.json()
+  return data.keywords || []
+}
+
+export async function recollectKeywords(keywords: string[]): Promise<{ status: string; keywords: string[]; message?: string }> {
+  const res = await fetch('/api/workers/recollect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keywords }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || `Recollect failed: ${res.status}`)
+  return data
+}
+
 export async function fetchRules(): Promise<Rule[]> {
   const res = await fetch('/api/rules')
   if (!res.ok) return []

@@ -6,10 +6,10 @@
   "sources": {
     "github":        {"enabled": true,  "credentials": {"api_token": "${GITHUB_TOKEN}"}},
     "reddit":        {"enabled": false, "credentials": {}},
-    "hackernews":    {"enabled": false, "credentials": {}},
-    "stackoverflow": {"enabled": false, "credentials": {}},
+    "hackernews":    {"enabled": true,  "credentials": {}},
+    "stackoverflow": {"enabled": true,  "credentials": {}},
     "producthunt":   {"enabled": false, "credentials": {}},
-    "huggingface":   {"enabled": false, "credentials": {}}
+    "huggingface":   {"enabled": true,  "credentials": {}}
   },
 
   "filters": {

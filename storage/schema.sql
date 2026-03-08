@@ -136,3 +136,14 @@ CREATE TABLE IF NOT EXISTS llm_usage_log (
     logged_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_logged_at ON llm_usage_log (logged_at);
+
+CREATE TABLE IF NOT EXISTS recollect_queue (
+    id          SERIAL PRIMARY KEY,
+    keywords    JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS collecting_in_progress (
+    canonical_name TEXT PRIMARY KEY,
+    started_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -187,39 +187,66 @@ def cmd_update_plan(json_str: str) -> None:
 
 def cmd_run_collect_worker(json_str: str = "{}") -> None:
     """
-    Collect worker: picks the single stalest keyword (not collected in 24h)
-    and collects signals for it. Called by the worker runner every 5 min (or manually).
+    Collect worker: first processes recollect_queue (user-requested), then picks
+    stalest keywords (not collected in 24h). Called by the worker runner every 5 min.
 
     Runs independently from the LLM worker - no GPU/LLM usage.
-    Multiple runner ticks can run concurrently on different keywords safely
-    because last_collected_at is locked before collection starts.
     """
     from core.orchestrator import Orchestrator  # noqa: PLC0415
 
     config = _load_config()
 
-    # Pause guard: set config.workers_paused = true to halt all collection/LLM
-    # workers during reclassification or maintenance without stopping the worker runner.
+    # Pause guard: do not process queue or stale when paused
     if config.get("workers_paused", False):
         _out({"status": "paused", "note": "Collection paused (workers_paused=true in config)."})
         return
 
     storage = _make_storage()
 
-    stale = storage.get_stale_keywords(min_age_hours=24, limit=2)
-    if not stale:
-        _out({"status": "idle", "note": "All keywords collected within last 24h."})
-        return
+    # Clear stale "in progress" state (e.g. after container restart)
+    storage.clear_collecting_in_progress()
 
+    queue = storage.get_recollect_queue()
     orch = Orchestrator(config, storage)
     results = []
+
+    # Process recollect queue first (order is critical: then get_stale_keywords won't return these)
+    for row in queue:
+        raw = row.get("keywords")
+        kws = raw if isinstance(raw, list) else json.loads(raw) if isinstance(raw, str) else []
+        if not kws:
+            storage.delete_recollect_request(row["id"])
+            continue
+        storage.add_collecting_in_progress(kws)
+        try:
+            orch.collect(keywords=kws)
+            for kw in kws:
+                storage.update_keyword_collected_at(kw)
+            storage.delete_recollect_request(row["id"])
+        except Exception as e:
+            log.exception("[collect_worker] recollect queue item failed: %s", e)
+            storage.delete_recollect_request(row["id"])
+        finally:
+            storage.remove_collecting_in_progress(kws)
+
+    # Normal stale-keywords collect (24h)
+    stale = storage.get_stale_keywords(min_age_hours=24, limit=2)
+    if not stale:
+        _out({
+            "status": "idle" if not results else "done",
+            "note": "All keywords collected within last 24h." if not results else None,
+            "collected": results,
+        })
+        return
+
     for keyword in stale:
-        # Lock for 24h before starting - prevents re-trigger if collect takes > interval
-        storage.update_keyword_collected_at(keyword)
-        result = orch.collect(keywords=[keyword])
-        # Update again with actual completion time
-        storage.update_keyword_collected_at(keyword)
-        results.append({"keyword": keyword, **result})
+        storage.add_collecting_in_progress([keyword])
+        try:
+            result = orch.collect(keywords=[keyword])
+            storage.update_keyword_collected_at(keyword)
+            results.append({"keyword": keyword, **result})
+        finally:
+            storage.remove_collecting_in_progress([keyword])
 
     _out({"status": "done", "collected": results})
 

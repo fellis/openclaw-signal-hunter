@@ -637,6 +637,64 @@ class PostgresStorage:
                 return [dict(row) for row in cur.fetchall()]
 
     # ------------------------------------------------------------------
+    # Recollect queue and collecting_in_progress
+    # ------------------------------------------------------------------
+
+    def get_recollect_queue(self) -> list[dict[str, Any]]:
+        """Return all rows from recollect_queue. keywords is JSONB (list of strings)."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "SELECT id, keywords FROM recollect_queue ORDER BY id"
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def delete_recollect_request(self, request_id: int) -> None:
+        """Remove a row from recollect_queue by id."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute("DELETE FROM recollect_queue WHERE id = %s", (request_id,))
+
+    def add_collecting_in_progress(self, keywords: list[str]) -> None:
+        """Mark keywords as currently being collected."""
+        if not keywords:
+            return
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                for kw in keywords:
+                    cur.execute(
+                        """
+                        INSERT INTO collecting_in_progress (canonical_name, started_at)
+                        VALUES (%s, now())
+                        ON CONFLICT (canonical_name) DO UPDATE SET started_at = now()
+                        """,
+                        (kw,),
+                    )
+
+    def remove_collecting_in_progress(self, keywords: list[str]) -> None:
+        """Remove keywords from collecting_in_progress."""
+        if not keywords:
+            return
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    "DELETE FROM collecting_in_progress WHERE canonical_name = ANY(%s)",
+                    (keywords,),
+                )
+
+    def get_collecting_in_progress(self) -> list[str]:
+        """Return list of canonical_name currently in collecting_in_progress."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute("SELECT canonical_name FROM collecting_in_progress")
+                return [row["canonical_name"] for row in cur.fetchall()]
+
+    def clear_collecting_in_progress(self) -> None:
+        """Remove all rows from collecting_in_progress (e.g. after worker restart)."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute("DELETE FROM collecting_in_progress")
+
     # ------------------------------------------------------------------
     # LLM task queue
     # ------------------------------------------------------------------
@@ -809,6 +867,11 @@ class PostgresStorage:
                     AND EXISTS (
                         SELECT 1 FROM keyword_collection_plans kcp
                         WHERE kcp.canonical_name = kp.canonical_name
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM collecting_in_progress c
+                        WHERE c.canonical_name = kp.canonical_name
+                        AND c.started_at > now() - interval '1 hour'
                     )
                     ORDER BY kp.last_collected_at ASC NULLS FIRST
                     LIMIT %s

@@ -507,6 +507,46 @@ async def get_keywords():
     return {"keywords": [r["canonical_name"] for r in rows]}
 
 
+@router.get("/keywords/status")
+async def get_keywords_status():
+    """Return keywords with last_collected_at, in_queue, in_progress for Recollect modal."""
+    profile_rows = fetchall(
+        "SELECT canonical_name, last_collected_at FROM keyword_profiles ORDER BY canonical_name"
+    )
+    queue_rows = fetchall("SELECT keywords FROM recollect_queue")
+    in_queue_set = set()
+    for row in queue_rows:
+        raw = row.get("keywords")
+        if isinstance(raw, list):
+            in_queue_set.update(k for k in raw if isinstance(k, str))
+        elif isinstance(raw, str):
+            try:
+                in_queue_set.update(json.loads(raw))
+            except (TypeError, ValueError):
+                pass
+
+    in_progress_rows = fetchall(
+        """
+        SELECT canonical_name FROM collecting_in_progress
+        WHERE started_at > now() - interval '1 hour'
+        """
+    )
+    in_progress_set = {r["canonical_name"] for r in in_progress_rows}
+
+    keywords = []
+    for r in profile_rows:
+        name = r["canonical_name"]
+        ts = r.get("last_collected_at")
+        last_collected_at = ts.isoformat() if ts and hasattr(ts, "isoformat") else (str(ts) if ts else None)
+        keywords.append({
+            "name": name,
+            "last_collected_at": last_collected_at,
+            "in_queue": name in in_queue_set,
+            "in_progress": name in in_progress_set,
+        })
+    return {"keywords": keywords}
+
+
 def _add_category_condition(where: str, params: list, categories: list[str]) -> tuple[str, list]:
     """Append a category filter condition to an existing WHERE clause."""
     if not categories:

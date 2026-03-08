@@ -11,10 +11,13 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+import json
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from storage.config_manager import ConfigManager
-from web_server.db import fetchall, fetchone
+from web_server.db import execute, fetchall, fetchone
 
 log = logging.getLogger(__name__)
 
@@ -353,11 +356,67 @@ async def clear_workers_logs_view(request: Request):
     return {"status": "ok"}
 
 
+@router.post("/recollect")
+async def post_recollect(body: dict[str, Any]):
+    """
+    Queue keywords for immediate (out-of-schedule) collection.
+    Body: {"keywords": ["rag", "ollama", ...]}.
+    Returns 202 with accepted keywords; 400 if invalid. Deduplicates against existing queue.
+    """
+    raw = body.get("keywords")
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="keywords must be a list of strings")
+    normalized = [str(k).strip().lower() for k in raw if k]
+    if not normalized:
+        raise HTTPException(status_code=400, detail="keywords list is empty")
+
+    valid_rows = fetchall("SELECT canonical_name FROM keyword_profiles")
+    valid_set = {r["canonical_name"] for r in valid_rows}
+    invalid = [k for k in normalized if k not in valid_set]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown keywords (must exist in keyword_profiles): {invalid[:10]}{'...' if len(invalid) > 10 else ''}",
+        )
+
+    queue_rows = fetchall("SELECT keywords FROM recollect_queue")
+    already_queued = set()
+    for row in queue_rows:
+        kw = row.get("keywords")
+        if isinstance(kw, list):
+            already_queued.update(kw)
+        elif isinstance(kw, str):
+            try:
+                already_queued.update(json.loads(kw))
+            except (TypeError, ValueError):
+                pass
+    to_insert = [k for k in normalized if k not in already_queued]
+    to_insert = list(dict.fromkeys(to_insert))
+
+    if not to_insert:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "accepted",
+                "keywords": [],
+                "message": "All selected keywords already in queue",
+            },
+        )
+
+    execute(
+        "INSERT INTO recollect_queue (keywords) VALUES (%s::jsonb)",
+        (json.dumps(to_insert),),
+    )
+    return {
+        "status": "accepted",
+        "keywords": to_insert,
+        "message": f"Recollect queued for {len(to_insert)} keyword(s)",
+    }
+
+
 @router.post("/restart")
 async def restart_workers():
     """Restart the worker container via Docker API. Requires Docker socket mounted."""
-    from fastapi import HTTPException
-
     container = _get_worker_container()
     if container is None:
         raise HTTPException(
