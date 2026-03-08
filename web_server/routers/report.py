@@ -266,7 +266,7 @@ async def get_report(
             result = {"total_signals": 0, "categories": []}
             cache.set("report", cache_key, value=result, ttl=REPORT_CACHE_TTL)
             return result
-        where = where + " AND p.raw_signal_id = ANY(%s)"
+        where = where + " AND p.raw_signal_id = ANY(%s::uuid[])"
         params = list(params) + [search_ids]
     rows = _fetch_signals(where, params)
     groups = _aggregate_signals(rows, categories)
@@ -329,7 +329,7 @@ async def get_clusters(
             result = {"clusters": []}
             cache.set("clusters", cache_key, value=result, ttl=REPORT_CACHE_TTL)
             return result
-        where = where + " AND p.raw_signal_id = ANY(%s)"
+        where = where + " AND p.raw_signal_id = ANY(%s::uuid[])"
         params = list(params) + [search_ids]
     rows = _fetch_signals(where, params)
     groups = _aggregate_signals(rows, [category])
