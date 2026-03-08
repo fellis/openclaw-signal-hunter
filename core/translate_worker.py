@@ -180,10 +180,14 @@ class TranslateWorker:
             raise ValueError(f"Translator returned non-JSON object: {type(data)}")
         translated = data.get("translations")
         if translated is None:
-            raise ValueError(
-                "Translator response missing 'translations' key. "
-                f"Expected {{'translations': [...]}}. Got keys: {list(data.keys())!r}"
+            detail = data.get("detail", "")
+            if isinstance(detail, list):
+                detail = "; ".join(str(d) for d in detail)
+            err_msg = (
+                f"Translator returned error (keys: {list(data.keys())!r}). "
+                f"detail={detail!r}"
             )
+            raise ValueError(err_msg)
         if len(translated) != len(payloads):
             raise ValueError(
                 f"Translator returned {len(translated)} items, expected {len(payloads)}"
