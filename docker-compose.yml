@@ -103,6 +103,10 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      embedder:
+        condition: service_healthy
+      embedder-vectorizer:
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql://signal:signal@postgres:5432/signal_hunter
       - QDRANT_URL=http://qdrant:6333
