@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Loader2 } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
@@ -9,9 +9,14 @@ import { fetchReport, fetchStats, fetchRules } from '@/api/report'
 import { filtersFromSearchParams, filtersToSearchParams } from '@/lib/urlParams'
 import type { Category, Filters, Rule, StatsResponse } from '@/types'
 
+const STATS_POLL_MS = 5000
+
 export default function Report({ lang = 'en' }: { lang?: string }) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const filters = filtersFromSearchParams(searchParams)
+  const filters = useMemo(
+    () => filtersFromSearchParams(searchParams),
+    [searchParams.toString()]
+  )
 
   const [categories, setCategories] = useState<Category[]>([])
   const [rules, setRules] = useState<Rule[]>([])
@@ -39,8 +44,20 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
   }, [load])
 
   useEffect(() => {
-    fetchStats().then(setStats).catch(() => {})
     fetchRules().then(setRules).catch(() => {})
+  }, [])
+
+  // Global pipeline stats: fetch once, then every 5s (no filters; numbers update smoothly)
+  useEffect(() => {
+    let cancelled = false
+    const tick = () => {
+      fetchStats()
+        .then((s) => { if (!cancelled) setStats(s) })
+        .catch(() => {})
+    }
+    tick()
+    const id = setInterval(tick, STATS_POLL_MS)
+    return () => { cancelled = true; clearInterval(id) }
   }, [])
 
   const FILTER_KEYS = ['date_from', 'date_to', 'sources', 'categories', 'keywords', 'intensities', 'confidence_min', 'confidence_max']
@@ -67,7 +84,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
           </button>
         }
       />
-      <PipelineStrip stats={stats} totalSignals={total} />
+      <PipelineStrip stats={stats} totalSignals={stats?.relevant_total ?? 0} />
 
       {/* Filters */}
       <FilterPanel filters={filters} onChange={updateFilters} rules={rules} />

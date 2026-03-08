@@ -60,12 +60,20 @@ export default function WorkersLogs() {
   }, [workerFilter, levelFilter])
 
   useEffect(() => {
-    fetchStats()
-      .then((s) => {
-        setStats(s)
-        setTotalSignals(s.relevant_total ?? 0)
-      })
-      .catch(() => {})
+    let cancelled = false
+    const tick = () => {
+      fetchStats()
+        .then((s) => {
+          if (!cancelled) {
+            setStats(s)
+            setTotalSignals(s.relevant_total ?? 0)
+          }
+        })
+        .catch(() => {})
+    }
+    tick()
+    const id = setInterval(tick, 5000)
+    return () => { cancelled = true; clearInterval(id) }
   }, [])
 
   const loadStatus = useCallback(async () => {

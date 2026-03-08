@@ -32,7 +32,7 @@ function PipelineStage({ index, label, value, sub, pct, alert }: PipelineStagePr
       </div>
       <div
         className="text-base font-semibold tabular-nums leading-tight"
-        style={{ color: alert ? '#f97316' : 'var(--text)' }}
+        style={{ color: alert ? '#f97316' : 'var(--text)', transition: 'opacity 0.2s ease' }}
       >
         {value}
       </div>
@@ -47,6 +47,7 @@ function PipelineStage({ index, label, value, sub, pct, alert }: PipelineStagePr
               height: '100%',
               background: barColor,
               borderRadius: 9999,
+              transition: 'width 0.4s ease',
             }}
           />
         </div>

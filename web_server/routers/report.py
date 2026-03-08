@@ -587,30 +587,63 @@ async def get_rules():
 
 @router.get("/stats")
 async def get_stats(request: Request):
-    """Return overall system statistics."""
+    """Return overall system statistics. One query with 4 CTEs (one scan per table)."""
     cache = request.app.state.cache
     cached = cache.get("stats")
     if cached:
         return cached
 
     row = fetchone("""
+        WITH rs AS (
+            SELECT
+                COUNT(*)::int AS raw_total,
+                COUNT(*) FILTER (WHERE collected_at >= now() - interval '24 hours')::int AS new_signals_24h
+            FROM raw_signals
+        ),
+        ps AS (
+            SELECT
+                COUNT(*)::int AS processed_total,
+                COUNT(*) FILTER (WHERE p.is_relevant = true)::int AS relevant_total,
+                COUNT(*) FILTER (WHERE p.is_relevant = false)::int AS irrelevant_total,
+                COUNT(*) FILTER (WHERE p.classification_source = 'embedding')::int AS classified_by_embeddings,
+                COUNT(*) FILTER (WHERE p.classification_source = 'llm')::int AS classified_by_llm,
+                COUNT(*) FILTER (WHERE p.borderline_override_pending = true)::int AS borderline_pending,
+                COUNT(*) FILTER (WHERE p.is_relevant = true AND p.summary IS NOT NULL)::int AS summarized_total,
+                COUNT(*) FILTER (WHERE p.is_relevant = true AND p.summary IS NULL)::int AS summary_pending,
+                AVG(p.rank_score) FILTER (WHERE p.is_relevant = true)::float AS avg_rank_score
+            FROM processed_signals p
+            JOIN raw_signals r ON r.id = p.raw_signal_id
+        ),
+        eq AS (
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'done')::int AS embedded_total,
+                COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_embeddings
+            FROM embedding_queue
+        ),
+        kp AS (
+            SELECT
+                COUNT(*)::int AS keywords_total,
+                COUNT(*) FILTER (WHERE last_collected_at >= now() - interval '24 hours')::int AS keywords_run_24h
+            FROM keyword_profiles
+        )
         SELECT
-            (SELECT COUNT(*) FROM raw_signals)::int AS raw_total,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.is_relevant = true)::int AS relevant_total,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.is_relevant = false)::int AS irrelevant_total,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id)::int AS processed_total,
-            (SELECT COUNT(*) FROM raw_signals) - (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id) AS unprocessed,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.classification_source = 'embedding')::int AS classified_by_embeddings,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.classification_source = 'llm')::int AS classified_by_llm,
-            (SELECT COUNT(*) FROM embedding_queue WHERE status = 'done')::int AS embedded_total,
-            (SELECT COUNT(*) FROM embedding_queue WHERE status = 'pending')::int AS pending_embeddings,
-            (SELECT COUNT(*) FROM keyword_profiles)::int AS keywords_total,
-            (SELECT COUNT(*) FROM keyword_profiles WHERE last_collected_at >= now() - interval '24 hours')::int AS keywords_run_24h,
-            (SELECT COUNT(*) FROM raw_signals WHERE collected_at >= now() - interval '24 hours')::int AS new_signals_24h,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.borderline_override_pending = true)::int AS borderline_pending,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.is_relevant = true AND p.summary IS NOT NULL)::int AS summarized_total,
-            (SELECT COUNT(*) FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.is_relevant = true AND p.summary IS NULL)::int AS summary_pending,
-            (SELECT AVG(p.rank_score)::float FROM processed_signals p JOIN raw_signals r ON r.id = p.raw_signal_id WHERE p.is_relevant = true) AS avg_rank_score
+            rs.raw_total,
+            rs.new_signals_24h,
+            ps.processed_total,
+            ps.relevant_total,
+            ps.irrelevant_total,
+            (rs.raw_total - ps.processed_total)::int AS unprocessed,
+            ps.classified_by_embeddings,
+            ps.classified_by_llm,
+            ps.borderline_pending,
+            ps.summarized_total,
+            ps.summary_pending,
+            ps.avg_rank_score,
+            eq.embedded_total,
+            eq.pending_embeddings,
+            kp.keywords_total,
+            kp.keywords_run_24h
+        FROM rs, ps, eq, kp
     """)
 
     result = dict(row) if row else {}
