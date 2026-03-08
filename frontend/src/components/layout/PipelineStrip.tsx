@@ -319,9 +319,9 @@ export default function PipelineStrip({ stats, totalSignals }: PipelineStripProp
       <PipelineStage
         index={5}
         label="Vectorize"
-        value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${totalSignals.toLocaleString()}`}
+        value={`${stats.embedded_total?.toLocaleString() ?? 0} / ${(stats.summarized_total ?? 0).toLocaleString()}`}
         sub="in Qdrant"
-        pct={totalSignals > 0 ? ((stats.embedded_total ?? 0) / totalSignals) * 100 : 0}
+        pct={(stats.summarized_total ?? 0) > 0 ? ((stats.embedded_total ?? 0) / (stats.summarized_total ?? 0)) * 100 : 0}
       />
     </div>
 
