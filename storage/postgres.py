@@ -411,6 +411,24 @@ class PostgresStorage:
                     (dedup_key,),
                 )
 
+    def fetch_random_llm_classified(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Fetch random processed_signals classified by LLM, with raw signal fields (for batch re-classification bench)."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT ps.dedup_key, ps.is_relevant,
+                           r.source, r.title, r.body
+                    FROM processed_signals ps
+                    JOIN raw_signals r ON r.id = ps.raw_signal_id
+                    WHERE ps.classification_source = 'llm'
+                    ORDER BY RANDOM()
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
     def count_processed(self) -> dict[str, int]:
         with self._conn() as conn:
             with self._cursor(conn) as cur:
