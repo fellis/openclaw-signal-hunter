@@ -131,6 +131,15 @@ export default function WorkersLogs() {
     'runner',
     'other',
   ]
+  const WORKER_LABELS: Record<string, string> = {
+    all: 'All workers',
+    run_worker: 'LLM',
+    run_embed_worker: 'Embed classifier',
+    run_collect_worker: 'Collect',
+    embed: 'Vectorize',
+    runner: 'Runner',
+    other: 'Other',
+  }
   const LEVEL_OPTIONS = ['all', 'info', 'warning', 'error']
 
   const levelColor: Record<string, string> = {
@@ -197,7 +206,7 @@ export default function WorkersLogs() {
         >
           {WORKER_OPTIONS.map((w) => (
             <option key={w} value={w}>
-              {w === 'all' ? 'All workers' : w}
+              {WORKER_LABELS[w] ?? w}
             </option>
           ))}
         </select>
@@ -277,8 +286,8 @@ export default function WorkersLogs() {
             >
               {ln.level}
             </span>
-            <span className="shrink-0 w-24 truncate" style={{ color: 'var(--accent)' }}>
-              {ln.worker}
+            <span className="shrink-0 w-28 truncate" style={{ color: 'var(--accent)' }}>
+              {WORKER_LABELS[ln.worker] ?? ln.worker}
             </span>
             <span className="min-w-0 break-all">{ln.message}</span>
           </div>

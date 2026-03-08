@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -68,6 +68,23 @@ def _parse_log_line(line: str) -> dict[str, Any] | None:
     return {"ts": "", "level": "info", "worker": RUNNER_WORKER, "message": line}
 
 
+def _ts_to_float(ts_str: str) -> float | None:
+    """Parse log timestamp '2026-03-08 02:33:23,799' to unix timestamp (float, UTC). Returns None if invalid."""
+    if not ts_str:
+        return None
+    try:
+        normalized = ts_str.strip().replace(",", ".")
+        if "." in normalized:
+            part, frac = normalized.split(".", 1)
+            dt = datetime.strptime(part, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            ms = frac.ljust(3, "0")[:3]
+            return dt.timestamp() + int(ms) / 1000.0
+        dt = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
 def _get_worker_container():
     """Resolve worker container via name or Compose label. Returns container or None."""
     try:
@@ -100,9 +117,9 @@ def _get_worker_container():
 def _get_docker_logs(
     container_name: str,
     tail: int = 500,
-    since: int | None = None,
-) -> tuple[list[dict[str, Any]], int | None]:
-    """Fetch container logs via Docker SDK. Returns (parsed_lines, next_since_unix)."""
+    since: float | int | None = None,
+) -> tuple[list[dict[str, Any]], float | None]:
+    """Fetch container logs via Docker SDK. Returns (parsed_lines, next_since_unix_float)."""
     container = _get_worker_container()
     if container is None:
         return [], None
@@ -138,19 +155,7 @@ def _get_docker_logs(
             if parsed.get("ts"):
                 next_ts = parsed["ts"]
 
-    next_since = None
-    if next_ts:
-        try:
-            # Parse "2025-03-08 12:00:00,123" or "2025-03-08 12:00:00"
-            normalized = next_ts.replace(",", ".")
-            if "." in normalized:
-                dt = datetime.strptime(normalized.split(".")[0], "%Y-%m-%d %H:%M:%S")
-            else:
-                dt = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
-            next_since = int(dt.timestamp())
-        except ValueError:
-            pass
-
+    next_since = _ts_to_float(next_ts) if next_ts else None
     return lines, next_since
 
 
@@ -264,13 +269,21 @@ async def get_workers_status(request: Request):
 @router.get("/logs")
 async def get_workers_logs(
     tail: int = Query(500, ge=1, le=LOG_TAIL_MAX),
-    since: int | None = Query(None),
+    since: float | None = Query(None),
     worker: str = Query("all"),
     level: str = Query("all"),
 ):
-    """Return container logs (parsed). worker: all | run_worker | run_embed_worker | run_collect_worker | embed | runner | other. level: all | info | warning | error."""
+    """Return container logs (parsed). since=unix ts (float) to get only new lines; returned lines are strictly after since to avoid duplicates."""
     container_name = os.environ.get("WORKER_CONTAINER_NAME", "signal-hunter-workers")
     lines, next_since = _get_docker_logs(container_name, tail=tail, since=since)
+
+    if since is not None:
+        # Exclude lines with timestamp <= since so the same line is not returned again on next poll
+        def _after_since(ln: dict[str, Any]) -> bool:
+            ts_f = _ts_to_float(ln.get("ts") or "")
+            return ts_f is None or ts_f > since
+
+        lines = [ln for ln in lines if _after_since(ln)]
 
     if worker != "all":
         lines = [ln for ln in lines if ln.get("worker") == worker]
