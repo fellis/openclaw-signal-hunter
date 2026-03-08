@@ -44,6 +44,7 @@
     "llm_body_chars": 600,
     "llm_max_tokens": 150,
     "llm_temperature": 0.0,
+    "llm_batch_size": 10,
     "domain_anchors": {
       "positive": [
         "AI model training and fine-tuning deep learning",

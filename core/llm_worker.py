@@ -58,6 +58,13 @@ _LLM_SYSTEM_V6 = (
     'Reply ONLY: {"relevant": true/false, "reason": "one sentence"}'
 )
 
+_BATCH_INSTRUCTION = (
+    "\n\nFor this request you receive MULTIPLE signals numbered [0], [1], ... "
+    "Reply with a JSON array of exactly that many objects in the same order, "
+    'e.g. [{"relevant": true, "reason": "..."}, {"relevant": false, "reason": "..."}]. '
+    "No other text, only the JSON array."
+)
+
 _LLM_PROMPTS = {
     "v6": _LLM_SYSTEM_V6,
 }
@@ -122,26 +129,57 @@ class LLMWorker:
             task_type = task["task_type"]
             payload = task["payload"]
 
-            log.info("[llm_worker] starting task_id=%s type=%s payload=%s", task_id, task_type, payload)
+            if task_type == "borderline_relevance":
+                hybrid_cfg = self._config.get("hybrid_relevance", {})
+                batch_size = int(hybrid_cfg.get("llm_batch_size", 1))
+                if batch_size > 1:
+                    extra = self._storage.claim_pending_llm_tasks("borderline_relevance", batch_size - 1)
+                    tasks_batch = [task] + extra
+                else:
+                    tasks_batch = [task]
+            else:
+                tasks_batch = [task]
+
+            log.info(
+                "[llm_worker] starting task_id=%s type=%s batch=%d payload=%s",
+                task_id, task_type, len(tasks_batch), payload if len(tasks_batch) == 1 else {"batch": len(tasks_batch)},
+            )
 
             try:
                 if task_type == "resolve":
                     result = self._handle_resolve(payload)
+                    self._storage.complete_llm_task(task_id)
+                    log.info("[llm_worker] done task_id=%s type=%s", task_id, task_type)
+                    processed.append({"task_type": task_type, **result})
                 elif task_type == "borderline_relevance":
-                    result = self._handle_borderline_relevance(payload)
+                    if len(tasks_batch) == 1:
+                        result = self._handle_borderline_relevance(payload)
+                        self._storage.complete_llm_task(task_id)
+                        log.info("[llm_worker] done task_id=%s type=%s", task_id, task_type)
+                        processed.append({"task_type": task_type, **result})
+                    else:
+                        results = self._handle_borderline_relevance_batch(tasks_batch)
+                        for t, r in zip(tasks_batch, results):
+                            if r.get("error"):
+                                self._storage.fail_llm_task(t["id"], r["error"])
+                                errors.append({"task_type": task_type, "error": r["error"]})
+                            else:
+                                self._storage.complete_llm_task(t["id"])
+                                processed.append({"task_type": task_type, **r})
+                        log.info("[llm_worker] done batch type=%s count=%d", task_type, len(tasks_batch))
                 elif task_type == "summarize_batch":
                     result = self._handle_summarize_batch()
+                    self._storage.complete_llm_task(task_id)
+                    log.info("[llm_worker] done task_id=%s type=%s", task_id, task_type)
+                    processed.append({"task_type": task_type, **result})
                 else:
                     raise ValueError(f"Unknown task_type: {task_type!r}")
 
-                self._storage.complete_llm_task(task_id)
-                log.info("[llm_worker] done task_id=%s type=%s", task_id, task_type)
-                processed.append({"task_type": task_type, **result})
-
             except Exception as e:
                 log.exception("[llm_worker] failed task_id=%s type=%s: %s", task_id, task_type, e)
-                self._storage.fail_llm_task(task_id, str(e))
-                errors.append({"task_type": task_type, "error": str(e)})
+                for t in tasks_batch:
+                    self._storage.fail_llm_task(t["id"], str(e))
+                    errors.append({"task_type": t["task_type"], "error": str(e)})
 
         remaining = self._storage.get_llm_queue_status()
         pending_count = sum(1 for t in remaining if t["status"] == "pending")
@@ -263,6 +301,110 @@ class LLMWorker:
             self._storage.clear_borderline_pending(dedup_key)
             log.info("[llm_worker] borderline NOT relevant: %s", dedup_key)
             return {"dedup_key": dedup_key, "relevant": False}
+
+    def _handle_borderline_relevance_batch(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Classify up to N borderline signals in one LLM call. Returns one result dict per task
+        (either {dedup_key, relevant, ...} or {error: str}). Caller completes/fails each task.
+        """
+        from core.llm_router import LLMCall, LLMRouter
+        from storage.text_cleaner import strip_hn_prefix
+
+        hybrid_cfg = self._config.get("hybrid_relevance", {})
+        prompt_version = hybrid_cfg.get("llm_prompt_version", "v6")
+        body_chars = int(hybrid_cfg.get("llm_body_chars", 600))
+        max_tokens = int(hybrid_cfg.get("llm_max_tokens", 150))
+        temperature = float(hybrid_cfg.get("llm_temperature", 0.0))
+
+        system_prompt = _LLM_PROMPTS.get(prompt_version, _LLM_SYSTEM_V6) + _BATCH_INSTRUCTION
+
+        rows: list[dict[str, Any]] = []
+        for t in tasks:
+            dedup_key = (t.get("payload") or {}).get("dedup_key", "")
+            if not dedup_key:
+                rows.append({"error": "missing dedup_key"})
+                continue
+            raw = self._storage.fetch_raw_signal_by_dedup_key(dedup_key)
+            if not raw:
+                log.warning("[llm_worker] borderline batch: signal not found %s", dedup_key)
+                rows.append({"error": "signal not found"})
+                continue
+            rows.append({"task": t, "dedup_key": dedup_key, "raw": raw})
+
+        if not rows or all("error" in r for r in rows):
+            return [r if "error" in r else {"error": "no valid signals"} for r in rows]
+
+        valid = [r for r in rows if "error" not in r]
+        blocks = []
+        for i, r in enumerate(valid):
+            raw = r["raw"]
+            dedup_key = r["dedup_key"]
+            title = strip_hn_prefix(raw.get("title") or "")
+            body = (raw.get("body") or "")[:body_chars]
+            source = raw.get("source") or ""
+            project = _extract_project(dedup_key)
+            parts = [f"[{i}]", f"Source: {source}"]
+            if project:
+                parts.append(f"Project: {project}")
+            parts.append(f"Title: {title}")
+            if body:
+                parts.append(f"Body: {body}")
+            blocks.append("\n".join(parts))
+        user_msg = "\n\n".join(blocks)
+
+        n = len(valid)
+        router = self._make_router()
+        call = LLMCall(
+            operation="borderline_relevance",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=max(512, n * 120),
+            temperature=temperature,
+        )
+        raw_response = router.complete(call).strip()
+
+        try:
+            parsed_list = json.loads(raw_response)
+            if not isinstance(parsed_list, list):
+                parsed_list = []
+        except (json.JSONDecodeError, AttributeError):
+            log.warning("[llm_worker] borderline batch: could not parse LLM response: %r", raw_response[:200])
+            return [{"error": "batch parse failed"} for _ in tasks]
+
+        results_by_index: list[dict[str, Any]] = []
+        for i, r in enumerate(valid):
+            item = parsed_list[i] if i < len(parsed_list) else None
+            if not item or not isinstance(item, dict):
+                results_by_index.append({"error": "batch response missing item"})
+                continue
+            is_relevant = bool(item.get("relevant", False))
+            dedup_key = r["dedup_key"]
+            raw = r["raw"]
+            if is_relevant:
+                ep = self._get_embed_processor()
+                ps = ep.classify_single(raw)
+                ps.is_relevant = True
+                ps.borderline_override_pending = False
+                ps.classification_source = "llm"
+                self._storage.upsert_processed_signal(ps)
+                log.info("[llm_worker] borderline RELEVANT: %s", dedup_key)
+                results_by_index.append({"dedup_key": dedup_key, "relevant": True, "matched_rules": [x.rule_name for x in ps.matched_rules]})
+            else:
+                self._storage.clear_borderline_pending(dedup_key)
+                log.info("[llm_worker] borderline NOT relevant: %s", dedup_key)
+                results_by_index.append({"dedup_key": dedup_key, "relevant": False})
+
+        out: list[dict[str, Any]] = []
+        idx = 0
+        for r in rows:
+            if "error" in r:
+                out.append(r)
+            else:
+                out.append(results_by_index[idx])
+                idx += 1
+        return out
 
     def _handle_summarize_batch(self) -> dict[str, Any]:
         """Generate summaries for relevant signals that were classified without one."""

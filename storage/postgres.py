@@ -762,6 +762,37 @@ class PostgresStorage:
                     "payload": row["payload"],
                 }
 
+    def claim_pending_llm_tasks(self, task_type: str, limit: int) -> list[dict[str, Any]]:
+        """
+        Atomically claim up to `limit` pending tasks of the given type (oldest first).
+        Uses FOR UPDATE SKIP LOCKED. Returns list of {id, task_type, payload}.
+        """
+        if limit <= 0:
+            return []
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE llm_task_queue q
+                    SET status = 'running', started_at = now()
+                    FROM (
+                        SELECT id FROM llm_task_queue
+                        WHERE task_type = %s AND status = 'pending'
+                        ORDER BY created_at ASC
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    ) sub
+                    WHERE q.id = sub.id
+                    RETURNING q.id, q.task_type, q.payload
+                    """,
+                    (task_type, limit),
+                )
+                rows = cur.fetchall()
+        return [
+            {"id": str(r["id"]), "task_type": r["task_type"], "payload": r["payload"]}
+            for r in rows
+        ]
+
     def complete_llm_task(self, task_id: str) -> None:
         """Delete a successfully completed task from the queue."""
         with self._conn() as conn:
