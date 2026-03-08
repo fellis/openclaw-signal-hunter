@@ -126,26 +126,10 @@ export default function WorkersLogs() {
     }
   }
 
-  const WORKER_OPTIONS = [
-    'all',
-    'run_worker',
-    'run_embed_worker',
-    'run_collect_worker',
-    'embed',
-    'run_translate_worker',
-    'runner',
-    'other',
+  const workerOptions = [
+    { id: 'all', label: 'All workers' },
+    ...(status?.workers ?? []),
   ]
-  const WORKER_LABELS: Record<string, string> = {
-    all: 'All workers',
-    run_worker: 'LLM',
-    run_embed_worker: 'Embed classifier',
-    run_collect_worker: 'Collect',
-    embed: 'Vectorize',
-    run_translate_worker: 'Translate',
-    runner: 'Runner',
-    other: 'Other',
-  }
   const LEVEL_OPTIONS = ['all', 'info', 'warning', 'error']
 
   const levelColor: Record<string, string> = {
@@ -211,9 +195,9 @@ export default function WorkersLogs() {
           className="text-xs rounded border px-2 py-1"
           style={{ background: 'var(--bg-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
         >
-          {WORKER_OPTIONS.map((w) => (
-            <option key={w} value={w}>
-              {WORKER_LABELS[w] ?? w}
+          {workerOptions.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.label}
             </option>
           ))}
         </select>
@@ -302,7 +286,7 @@ export default function WorkersLogs() {
               {ln.level}
             </span>
             <span className="shrink-0 min-w-[8.5rem]" style={{ color: 'var(--accent)' }}>
-              {WORKER_LABELS[ln.worker] ?? ln.worker}
+              {workerOptions.find((w) => w.id === ln.worker)?.label ?? ln.worker}
             </span>
             <span className="min-w-0 break-all">{ln.message}</span>
           </div>

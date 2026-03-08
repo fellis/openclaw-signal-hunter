@@ -22,52 +22,53 @@ router = APIRouter()
 # Max tail lines for logs (cap on backend)
 LOG_TAIL_MAX = 20_000
 
-# Logger name (Python %(name)s) -> worker filter value (matches run_workers.sh commands)
-LOGGER_TO_WORKER: dict[str, str] = {
-    "skill.main": "runner",
-    "core.llm_worker": "run_worker",
-    "core.llm_router": "run_worker",
-    "core.translate_worker": "run_translate_worker",
-    "core.resolver": "run_worker",
-    "core.embed_worker": "run_embed_worker",
-    "core.embed_processor": "run_embed_worker",
-    "core.orchestrator": "embed",
-    "core.embedder": "embed",
-    "storage.postgres": "run_worker",
-    "storage.vector": "embed",
-    "storage.pending": "run_worker",
-    "collectors.github": "run_collect_worker",
-    "collectors.hackernews": "run_collect_worker",
-    "collectors.reddit": "run_collect_worker",
-    "collectors.stackoverflow": "run_collect_worker",
-    "collectors.huggingface": "run_collect_worker",
-    "httpx": "run_worker",
-    "httpcore": "run_worker",
+# Single source of truth for worker filter: ids and display labels (exposed via API; skill tags logs with these ids)
+WORKER_IDS = [
+    "run_worker",
+    "run_translate_worker",
+    "run_collect_worker",
+    "run_embed_worker",
+    "embed",
+    "runner",
+    "other",
+]
+WORKER_LABELS: dict[str, str] = {
+    "run_worker": "LLM",
+    "run_translate_worker": "Translate",
+    "run_collect_worker": "Collect",
+    "run_embed_worker": "Embed classifier",
+    "embed": "Vectorize",
+    "runner": "Runner",
+    "other": "Other",
 }
-# Fallback for shell lines (e.g. "Worker runner started...")
-RUNNER_WORKER = "runner"
-OTHER_WORKER = "other"
 
-# Python logging format: 2025-03-08 12:00:00,123 WARNING core.llm_worker: message
-LOG_LINE_RE = re.compile(
+# Log line format from skill (tagged): timestamp level worker name: message
+LOG_LINE_RE_TAGGED = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d+)?)\s+(\w+)\s+(\S+)\s+([\w.]+):\s*(.*)$",
+    re.DOTALL,
+)
+# Untagged (old or non-skill): timestamp level name: message -> treat as "other"
+LOG_LINE_RE_UNTAGGED = re.compile(
     r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d+)?)\s+(\w+)\s+([\w.]+):\s*(.*)$",
     re.DOTALL,
 )
 
 
 def _parse_log_line(line: str) -> dict[str, Any] | None:
-    """Parse a single log line. Returns dict with ts, level, worker, message or None for non-matching."""
+    """Parse a single log line. Tagged lines (from skill) have worker in line; untagged get runner/other."""
     line = line.rstrip("\n\r")
     if not line:
         return None
-    m = LOG_LINE_RE.match(line)
+    m = LOG_LINE_RE_TAGGED.match(line)
     if m:
-        ts_str, level, logger_name, message = m.groups()
-        level = level.lower()
-        worker = LOGGER_TO_WORKER.get(logger_name, OTHER_WORKER)
-        return {"ts": ts_str, "level": level, "worker": worker, "message": message}
-    # Shell or other output
-    return {"ts": "", "level": "info", "worker": RUNNER_WORKER, "message": line}
+        ts_str, level, worker, _logger, message = m.groups()
+        return {"ts": ts_str, "level": level.lower(), "worker": worker, "message": message}
+    m = LOG_LINE_RE_UNTAGGED.match(line)
+    if m:
+        ts_str, level, _logger, message = m.groups()
+        return {"ts": ts_str, "level": level.lower(), "worker": "other", "message": message}
+    # Shell or non-Python output
+    return {"ts": "", "level": "info", "worker": "runner", "message": line}
 
 
 def _ts_to_float(ts_str: str) -> float | None:
@@ -279,6 +280,7 @@ async def get_workers_status(request: Request):
     )
     translation_worker = {"pending": int(trans_row.get("pending", 0) or 0) if trans_row else 0}
 
+    workers = [{"id": wid, "label": WORKER_LABELS.get(wid, wid)} for wid in WORKER_IDS]
     result = {
         "schedule": schedule,
         "llm_queue": llm_queue,
@@ -286,6 +288,7 @@ async def get_workers_status(request: Request):
         "collect_worker": collect_worker,
         "embed_vectorize": embed_vectorize,
         "translation_worker": translation_worker,
+        "workers": workers,
     }
     cache.set("workers_status", value=result, ttl=10)
     return result
@@ -314,7 +317,7 @@ async def get_workers_logs(
     prev_msg: str | None = None
     deduped: list[dict[str, Any]] = []
     for ln in lines:
-        if ln.get("worker") == RUNNER_WORKER and ln.get("message"):
+        if ln.get("worker") == "runner" and ln.get("message"):
             msg = (ln["message"] or "").strip()
             if msg == prev_msg:
                 continue
@@ -323,32 +326,6 @@ async def get_workers_logs(
             prev_msg = None
         deduped.append(ln)
     lines = deduped
-
-    # Refine worker for httpx/httpcore lines by URL (they all map to run_worker otherwise)
-    for ln in lines:
-        if ln.get("worker") != "run_worker":
-            continue
-        msg = (ln.get("message") or "")
-        if "6336" in msg or "vectorizer" in msg:
-            ln["worker"] = "embed"
-        elif "6335" in msg or ("embedder" in msg and "/embed" in msg):
-            ln["worker"] = "run_embed_worker"
-        elif "api.github.com" in msg or "github.com" in msg or "reddit.com" in msg or "stackoverflow.com" in msg or "huggingface.co" in msg:
-            ln["worker"] = "run_collect_worker"
-
-    # Runner stdout JSON: assign to worker by content (skill _out() output)
-    for ln in lines:
-        if ln.get("worker") != RUNNER_WORKER:
-            continue
-        msg = (ln.get("message") or "").strip()
-        if not msg.startswith("{"):
-            continue
-        if '"translated"' in msg and '"rows_stored"' in msg:
-            ln["worker"] = "run_translate_worker"
-        elif '"pending_remaining"' in msg or '"tasks"' in msg:
-            ln["worker"] = "run_worker"
-        elif '"phase"' in msg and '"embed"' in msg and '"total"' in msg:
-            ln["worker"] = "embed"
 
     if worker != "all":
         lines = [ln for ln in lines if ln.get("worker") == worker]

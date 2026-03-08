@@ -23,12 +23,8 @@ _ENV_PATH = Path(__file__).parent.parent / ".env"
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH)
 
-_LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARNING").upper()
-logging.basicConfig(
-    level=getattr(logging, _LOG_LEVEL, logging.WARNING),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    stream=sys.stderr,
-)
+from skill.context import out as _out, set_worker
+
 log = logging.getLogger(__name__)
 
 
@@ -51,10 +47,6 @@ def _make_router(config: dict[str, Any]):
 def _make_config_manager():
     from storage.config_manager import ConfigManager  # noqa: PLC0415
     return ConfigManager()
-
-
-def _out(data: Any) -> None:
-    print(json.dumps(data, ensure_ascii=False, default=str), flush=True)
 
 
 def _err(msg: str, code: int = 1) -> None:
@@ -909,6 +901,7 @@ def main() -> None:
     if command not in COMMANDS:
         _err(f"Unknown command: '{command}'. Available: {', '.join(COMMANDS)}")
 
+    set_worker(command)
     handler, needs_arg = COMMANDS[command]
     provided = args[1:]
 

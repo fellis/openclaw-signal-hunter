@@ -134,8 +134,14 @@ export interface WorkerSchedule {
   run_translate_worker_interval_sec: number
 }
 
+export interface WorkerFilterOption {
+  id: string
+  label: string
+}
+
 export interface WorkerStatusResponse {
   schedule: WorkerSchedule
+  workers: WorkerFilterOption[]
   llm_queue: {
     pending: number
     running: number
