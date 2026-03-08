@@ -23,8 +23,9 @@ _ENV_PATH = Path(__file__).parent.parent / ".env"
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH)
 
+_LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARNING").upper()
 logging.basicConfig(
-    level=logging.WARNING,
+    level=getattr(logging, _LOG_LEVEL, logging.WARNING),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     stream=sys.stderr,
 )

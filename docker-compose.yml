@@ -114,6 +114,7 @@ services:
       - EMBEDDER_URL=http://embedder:6335
       - EMBEDDER_VECTORIZER_URL=http://embedder-vectorizer:6336
       - TRANSLATOR_URL=https://llm.aegisalpha.io/translator
+      - LOG_LEVEL=INFO
 
 volumes:
   pgdata:

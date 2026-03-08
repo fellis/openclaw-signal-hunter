@@ -285,6 +285,20 @@ async def get_workers_logs(
 
         lines = [ln for ln in lines if _after_since(ln)]
 
+    # Drop consecutive duplicate runner lines (same JSON status printed every tick floods the UI)
+    prev_msg: str | None = None
+    deduped: list[dict[str, Any]] = []
+    for ln in lines:
+        if ln.get("worker") == RUNNER_WORKER and ln.get("message"):
+            msg = (ln["message"] or "").strip()
+            if msg == prev_msg:
+                continue
+            prev_msg = msg
+        else:
+            prev_msg = None
+        deduped.append(ln)
+    lines = deduped
+
     if worker != "all":
         lines = [ln for ln in lines if ln.get("worker") == worker]
     if level != "all":
