@@ -816,7 +816,7 @@ def cmd_embedder_service(json_str: str) -> None:
         try:
             import httpx  # noqa: PLC0415
             config = _load_config()
-            service_url = config.get("embedder", {}).get("service_url", "http://localhost:6335")
+            service_url = os.environ.get("EMBEDDER_URL") or config.get("embedder", {}).get("service_url", "http://localhost:6335")
             resp = httpx.get(f"{service_url}/health", timeout=5.0)
             health = resp.json()
             running = True

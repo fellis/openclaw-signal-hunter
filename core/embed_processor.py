@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -87,7 +88,11 @@ class EmbedProcessor:
         self._max_body_chars = int(proc_cfg.get("max_body_chars", 1000))
 
         embedder_cfg = config.get("embedder", {})
-        self._service_url = (embedder_cfg.get("service_url") or "http://localhost:6335").rstrip("/")
+        self._service_url = (
+            os.environ.get("EMBEDDER_URL")
+            or embedder_cfg.get("service_url")
+            or "http://localhost:6335"
+        ).rstrip("/")
 
         # Domain pre-filter config
         hybrid_cfg = config.get("hybrid_relevance", {})

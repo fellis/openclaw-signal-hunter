@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from typing import Any
@@ -190,12 +191,18 @@ class Orchestrator:
         vector = VectorStorage()
         embedder_cfg = self._config.get("embedder", {})
         vectorizer_cfg = self._config.get("embedder_vectorizer", embedder_cfg)
+        # Vectorize worker uses dedicated embedder-vectorizer so it does not compete with embed worker (embedder).
+        _embed_url = (
+            os.environ.get("EMBEDDER_VECTORIZER_URL")
+            or vectorizer_cfg.get("service_url")
+            or embedder_cfg.get("service_url")
+        )
         embedder = Embedder(
             storage=self._storage,
             vector=vector,
             batch_size=vectorizer_cfg.get("batch_size", embedder_cfg.get("batch_size", 64)),
             device=device,
-            service_url=vectorizer_cfg.get("service_url", embedder_cfg.get("service_url")),
+            service_url=_embed_url,
             max_items=vectorizer_cfg.get("max_items_per_run", embedder_cfg.get("max_items_per_run", 512)),
         )
         _emit({"status": "running", "phase": "embed"})
@@ -213,11 +220,12 @@ class Orchestrator:
 
         vector = VectorStorage()
         embedder_cfg = self._config.get("embedder", {})
+        _embed_url = os.environ.get("EMBEDDER_URL") or embedder_cfg.get("service_url")
         embedder = Embedder(
             storage=self._storage,
             vector=vector,
             device=embedder_cfg.get("device", "cpu"),
-            service_url=embedder_cfg.get("service_url"),
+            service_url=_embed_url,
         )
 
         threshold = self._config.get("report", {}).get("similarity_threshold", 0.5)
