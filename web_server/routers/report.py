@@ -142,7 +142,7 @@ def _build_where(
 
 
 def _fetch_signals(where: str, params: list) -> list[dict]:
-    """Fetch all relevant signals matching filters. Returns lightweight rows."""
+    """Fetch all relevant signals matching filters. Only vectorized (embedding_queue.status = 'done')."""
     rows = fetchall(
         f"""
         SELECT
@@ -158,6 +158,7 @@ def _fetch_signals(where: str, params: list) -> list[dict]:
             r.title
         FROM processed_signals p
         JOIN raw_signals r ON r.id = p.raw_signal_id
+        JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key AND eq.status = 'done'
         WHERE {where}
         ORDER BY p.rank_score DESC NULLS LAST
         """,
@@ -402,6 +403,7 @@ async def get_signals(
             ts.text AS summary_translated
         FROM raw_signals r
         JOIN processed_signals p ON p.raw_signal_id = r.id
+        JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key AND eq.status = 'done'
         LEFT JOIN signal_translations tt
                ON tt.signal_id = r.id AND tt.lang = %s AND tt.field = 'title'
         LEFT JOIN signal_translations ts
@@ -512,13 +514,15 @@ async def get_filter_counts(
     def _to_map(rows: list[dict], key: str) -> dict[str, int]:
         return {r[key]: r["count"] for r in rows}
 
-    # --- Sources (exclude source filter, apply all others) ---
+    # --- Sources (exclude source filter, apply all others); only vectorized ---
     sw, sp = _build_where(date_from, date_to, sources=[], intensities=intensities,
                           confidence_min=confidence_min, confidence_max=confidence_max, keywords=keywords)
     sw, sp = _add_category_condition(sw, sp, categories)
     source_rows = fetchall(
         f"SELECT r.source, COUNT(*) AS count FROM processed_signals p "
-        f"JOIN raw_signals r ON r.id = p.raw_signal_id WHERE {sw} GROUP BY r.source",
+        f"JOIN raw_signals r ON r.id = p.raw_signal_id "
+        f"JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key AND eq.status = 'done' "
+        f"WHERE {sw} GROUP BY r.source",
         sp,
     )
 
@@ -528,25 +532,28 @@ async def get_filter_counts(
     cat_rows = _fetch_signals(cw, cp)
     cat_groups = _aggregate_signals(cat_rows, category_filter=[])
 
-    # --- Keywords (exclude keyword filter, apply all others) ---
+    # --- Keywords (exclude keyword filter, apply all others); only vectorized ---
     kw_where, kw_params = _build_where(date_from, date_to, sources=sources, intensities=intensities,
                                        confidence_min=confidence_min, confidence_max=confidence_max, keywords=[])
     kw_where, kw_params = _add_category_condition(kw_where, kw_params, categories)
     keyword_rows = fetchall(
         f"SELECT kw, COUNT(*) AS count FROM processed_signals p "
         f"JOIN raw_signals r ON r.id = p.raw_signal_id "
+        f"JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key AND eq.status = 'done' "
         f"JOIN LATERAL unnest(p.keywords_matched) AS kw ON true "
         f"WHERE {kw_where} GROUP BY kw ORDER BY count DESC",
         kw_params,
     )
 
-    # --- Intensities (exclude intensity filter, apply all others) ---
+    # --- Intensities (exclude intensity filter, apply all others); only vectorized ---
     iw, ip = _build_where(date_from, date_to, sources=sources, intensities=[],
                           confidence_min=confidence_min, confidence_max=confidence_max, keywords=keywords)
     iw, ip = _add_category_condition(iw, ip, categories)
     intensity_rows = fetchall(
         f"SELECT p.intensity::text AS name, COUNT(*) AS count FROM processed_signals p "
-        f"JOIN raw_signals r ON r.id = p.raw_signal_id WHERE {iw} GROUP BY p.intensity ORDER BY p.intensity",
+        f"JOIN raw_signals r ON r.id = p.raw_signal_id "
+        f"JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key AND eq.status = 'done' "
+        f"WHERE {iw} GROUP BY p.intensity ORDER BY p.intensity",
         ip,
     )
 
