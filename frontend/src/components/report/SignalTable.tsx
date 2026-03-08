@@ -516,8 +516,15 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
   }
 
   return (
-    <div className="overflow-x-auto" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
-      <table className="w-full border-collapse" style={{ tableLayout: 'fixed' }}>
+    <div
+      className="overflow-x-auto"
+      style={{
+        maxHeight: 'calc(100vh - 200px)',
+        overflowY: 'auto',
+        scrollbarGutter: 'stable',
+      }}
+    >
+      <table className="w-full border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
         <colgroup>
           <col style={{ width: 44 }} />
           <col style={{ width: 'min(380px, 32%)' }} />
@@ -533,7 +540,7 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
         </colgroup>
         <thead>
           <tr>
-            <th className="pl-4" style={{ ...thStyle, width: 44 }} />
+            <th className="pl-2 pr-2" style={{ ...thStyle, width: 44 }} />
             <th className="text-left pl-0 pr-4" style={thStyle}>
               <SortHeader label="Category / Cluster / Signal" col="count" {...colProps} />
             </th>
