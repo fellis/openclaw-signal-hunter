@@ -94,8 +94,15 @@ class LLMWorker:
 
         while time.monotonic() < deadline:
             if self._storage.has_running_llm_task():
-                log.warning("[llm_worker] unexpected running task, stopping loop")
-                break
+                # Reset tasks stuck in 'running' for > 1 min (e.g. previous tick died mid-call)
+                reset = self._storage.reset_stuck_llm_tasks(timeout_minutes=1)
+                if reset:
+                    log.warning("[llm_worker] reset %d stuck task(s) (were running > 1 min)", reset)
+                if self._storage.has_running_llm_task():
+                    log.info(
+                        "[llm_worker] task still running (another tick may be processing); skipping this tick"
+                    )
+                    break
 
             if (
                 not self._storage.has_pending_task_of_type("summarize_batch")
