@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from math import isqrt
 from typing import Any
@@ -326,6 +327,8 @@ def name_clusters(
         'Format: {"0": "label", "1": "label", ...}'
     )
 
+    t0 = time.monotonic()
+    log.info("[clustering] LLM cluster naming START (shared backend with worker)")
     try:
         import httpx  # noqa: PLC0415
         from openai import OpenAI  # noqa: PLC0415
@@ -354,12 +357,14 @@ def name_clusters(
         if start >= 0 and end > start:
             try:
                 raw = json.loads(text[start:end])
+                log.info("[clustering] LLM cluster naming DONE in %.1fs", time.monotonic() - t0)
                 return {int(k): str(v) for k, v in raw.items()}
             except json.JSONDecodeError as parse_err:
-                log.warning("[clustering] LLM JSON parse failed: %s", parse_err)
+                log.warning("[clustering] LLM JSON parse failed after %.1fs: %s", time.monotonic() - t0, parse_err)
     except Exception as e:
-        log.warning("[clustering] LLM naming failed: %s", e)
+        log.warning("[clustering] LLM naming failed after %.1fs: %s", time.monotonic() - t0, e)
 
+    log.info("[clustering] LLM cluster naming fallback after %.1fs", time.monotonic() - t0)
     return _fallback_names(clusters, titles_by_id)
 
 

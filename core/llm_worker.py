@@ -392,7 +392,10 @@ class LLMWorker:
             max_tokens=max(512, n * 120),
             temperature=temperature,
         )
+        t0 = time.monotonic()
+        log.info("[llm_worker] LLM batch request START (shared backend) n=%d", n)
         raw_response = router.complete(call).strip()
+        log.info("[llm_worker] LLM batch request DONE in %.1fs", time.monotonic() - t0)
         if raw_response.startswith("```"):
             raw_response = raw_response.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
