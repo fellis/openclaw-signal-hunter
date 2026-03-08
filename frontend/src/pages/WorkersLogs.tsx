@@ -186,7 +186,7 @@ export default function WorkersLogs() {
               Schedule
             </span>
             <span className="text-xs" style={{ color: 'var(--text)' }}>
-              LLM / Embed / Vectorize / Translate: {formatInterval(status.schedule.run_worker_interval_sec)} · Collect:{' '}
+              Translate, LLM, Embed, Vectorize: {formatInterval(status.schedule.run_worker_interval_sec)} · Collect:{' '}
               {formatInterval(status.schedule.run_collect_worker_interval_sec)}
             </span>
           </div>

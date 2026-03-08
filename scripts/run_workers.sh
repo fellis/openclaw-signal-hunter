@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Worker runner: runs LLM worker, embed worker, collect worker, and embed (vectorize) in a loop.
-# Single process, one instance per host (lock file). Used by signal-hunter-workers container.
+# Worker runner: each worker has its own loop and interval. All run in parallel.
+# Single process (lock file), multiple background loops. Used by signal-hunter-workers container.
 
 set -e
 LOCK_FILE="${LOCK_FILE:-/tmp/signal-hunter-workers.lock}"
@@ -24,22 +24,18 @@ acquire_lock() {
   trap 'rm -f "$LOCK_FILE"' EXIT
 }
 
-run_tick() {
-  # Run quick workers first so they are not blocked by long-running LLM/embed
-  python -m skill run_translate_worker || true
-  python -m skill run_collect_worker   || true
-  python -m skill run_worker           || true
-  python -m skill run_embed_worker     || true
-  python -m skill embed                || true
-}
-
 main() {
   acquire_lock
-  echo "Worker runner started (PID $$). Interval: ${INTERVAL_WORKER}s (translate, collect, LLM, embed, vectorize)."
-  while true; do
-    run_tick
-    sleep "$INTERVAL_WORKER"
-  done
+  echo "Worker runner started (PID $$). Translate/LLM/Embed/Vectorize: every ${INTERVAL_WORKER}s. Collect: every ${INTERVAL_COLLECT}s."
+
+  # Each worker: own loop, own interval (parallel)
+  ( while true; do python -m skill run_translate_worker || true; sleep "$INTERVAL_WORKER"; done ) &
+  ( while true; do python -m skill run_collect_worker   || true; sleep "$INTERVAL_COLLECT"; done ) &
+  ( while true; do python -m skill run_worker           || true; sleep "$INTERVAL_WORKER"; done ) &
+  ( while true; do python -m skill run_embed_worker     || true; sleep "$INTERVAL_WORKER"; done ) &
+  ( while true; do python -m skill embed                || true; sleep "$INTERVAL_WORKER"; done ) &
+
+  wait
 }
 
 main
