@@ -25,27 +25,19 @@ acquire_lock() {
 }
 
 run_tick() {
-  python -m skill run_worker         || true
-  python -m skill run_embed_worker   || true
-  python -m skill embed              || true
+  # Run quick workers first so they are not blocked by long-running LLM/embed
   python -m skill run_translate_worker || true
-}
-
-run_collect_tick() {
-  python -m skill run_collect_worker || true
+  python -m skill run_collect_worker   || true
+  python -m skill run_worker           || true
+  python -m skill run_embed_worker     || true
+  python -m skill embed                || true
 }
 
 main() {
   acquire_lock
-  echo "Worker runner started (PID $$). Intervals: worker/embed ${INTERVAL_WORKER}s, collect ${INTERVAL_COLLECT}s."
-  local collect_count=0
+  echo "Worker runner started (PID $$). Interval: ${INTERVAL_WORKER}s (translate, collect, LLM, embed, vectorize)."
   while true; do
     run_tick
-    collect_count=$((collect_count + 1))
-    if [[ $((collect_count * INTERVAL_WORKER)) -ge $INTERVAL_COLLECT ]]; then
-      run_collect_tick
-      collect_count=0
-    fi
     sleep "$INTERVAL_WORKER"
   done
 }

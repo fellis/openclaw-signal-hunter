@@ -74,10 +74,14 @@ export default function WorkersLogs() {
         worker: workerFilter !== 'all' ? workerFilter : undefined,
         level: levelFilter !== 'all' ? levelFilter : undefined,
       })
+      // Apply worker/level filter on client so filter works even if backend query params are wrong
+      let filtered = data.lines
+      if (workerFilter !== 'all') filtered = filtered.filter((ln) => ln.worker === workerFilter)
+      if (levelFilter !== 'all') filtered = filtered.filter((ln) => ln.level === levelFilter)
       if (since === undefined) {
-        setLines(data.lines)
+        setLines(filtered)
       } else {
-        setLines((prev) => [...prev, ...data.lines])
+        setLines((prev) => [...prev, ...filtered])
       }
       if (data.next_since != null) setNextSince(data.next_since)
     } catch (e) {
