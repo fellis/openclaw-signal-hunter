@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { BarChart2, Search, Zap, Moon, Sun, ScrollText } from 'lucide-react'
+import { BarChart2, Zap, Moon, Sun, ScrollText } from 'lucide-react'
 import type { Lang } from '@/App'
 import { PAGE_PATHS, type Page } from '@/lib/urlParams'
 import { cn } from '@/lib/utils'
@@ -15,7 +15,6 @@ interface Props {
 const NAV = [
   { id: 'report' as Page, path: PAGE_PATHS.report, icon: Zap, label: 'Signals' },
   { id: 'charts' as Page, path: PAGE_PATHS.charts, icon: BarChart2, label: 'Charts' },
-  { id: 'search' as Page, path: PAGE_PATHS.search, icon: Search, label: 'Search' },
   { id: 'logs' as Page, path: PAGE_PATHS.logs, icon: ScrollText, label: 'Logs' },
 ]
 

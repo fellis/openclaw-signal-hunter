@@ -170,6 +170,93 @@ def _enrich_from_pg(qdrant_results: list[dict], lang: str = "en") -> list[dict]:
     return results
 
 
+def get_search_result_ids(
+    q: str,
+    search_mode: str,
+    sources: list[str],
+    keywords: list[str],
+    intensities: list[int],
+    confidence_min: float | None,
+    confidence_max: float | None,
+    date_from: str | None,
+    date_to: str | None,
+    top_k: int = 200,
+) -> list[str]:
+    """
+    Return list of raw_signal_id (string) for report/clusters filtering.
+    Used when report or clusters are restricted by search query. No cache.
+    search_mode is "semantic" or "text". Only vectorized signals (in embedding_queue).
+    """
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+
+    if search_mode == "text":
+        conditions = [
+            "p.is_relevant = true",
+            "(r.title ILIKE %s OR r.body ILIKE %s)",
+        ]
+        pattern = f"%{q}%"
+        params: list[Any] = [pattern, pattern]
+        if sources:
+            conditions.append("r.source = ANY(%s)")
+            params.append(sources)
+        if keywords:
+            kw_conds = ["%s = ANY(p.keywords_matched)" for _ in keywords]
+            conditions.append("(" + " OR ".join(kw_conds) + ")")
+            params.extend(keywords)
+        if date_from:
+            conditions.append("r.created_at >= %s")
+            params.append(date_from)
+        if date_to:
+            conditions.append("r.created_at <= %s")
+            params.append(date_to)
+        params.append(top_k)
+        where = " AND ".join(conditions)
+        rows = fetchall(
+            f"""
+            SELECT p.raw_signal_id::text
+            FROM processed_signals p
+            JOIN raw_signals r ON r.id = p.raw_signal_id
+            JOIN embedding_queue eq ON eq.dedup_key = p.dedup_key AND eq.status = 'done'
+            WHERE {where}
+            ORDER BY p.rank_score DESC NULLS LAST
+            LIMIT %s
+            """,
+            params,
+        )
+        return [row["raw_signal_id"] for row in rows]
+
+    # semantic
+    try:
+        vector = _embed_query(q)
+    except Exception as e:
+        log.warning("[get_search_result_ids] embed_query failed: %s", e)
+        return []
+    hits = _qdrant_search(
+        vector=vector,
+        top_k=top_k,
+        threshold=0.45,
+        sources=sources,
+        intensities=intensities,
+        confidence_min=confidence_min,
+        confidence_max=confidence_max,
+        keywords=keywords,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    if not hits:
+        return []
+    urls = [h["payload"].get("url") for h in hits if h.get("payload", {}).get("url")]
+    if not urls:
+        return []
+    rows = fetchall(
+        "SELECT id::text FROM raw_signals WHERE url = ANY(%s)",
+        (urls,),
+    )
+    return [row["id"] for row in rows]
+
+
 @router.get("/search/semantic")
 async def semantic_search(
     request: Request,

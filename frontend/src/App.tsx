@@ -3,9 +3,18 @@ import { Routes, Route, Navigate, useLocation, useSearchParams } from 'react-rou
 import Sidebar from '@/components/layout/Sidebar'
 import Report from '@/pages/Report'
 import Charts from '@/pages/Charts'
-import Search from '@/pages/Search'
 import WorkersLogs from '@/pages/WorkersLogs'
 import { pageFromPath, PAGE_PATHS } from '@/lib/urlParams'
+
+function SearchRedirect() {
+  const location = useLocation()
+  const params = new URLSearchParams(location.search)
+  const mode = params.get('mode')
+  if (mode === 'text') params.set('search_mode', 'text')
+  params.delete('mode')
+  const qs = params.toString()
+  return <Navigate to={qs ? `/report?${qs}` : PAGE_PATHS.report} replace />
+}
 
 export type Lang = 'en' | 'ru'
 
@@ -56,7 +65,7 @@ export default function App() {
         <Routes>
           <Route path={PAGE_PATHS.report} element={<Report lang={lang} />} />
           <Route path={PAGE_PATHS.charts} element={<Charts />} />
-          <Route path={PAGE_PATHS.search} element={<Search lang={lang} />} />
+          <Route path="/search" element={<SearchRedirect />} />
           <Route path={PAGE_PATHS.logs} element={<WorkersLogs />} />
           <Route path="/" element={<Navigate to={PAGE_PATHS.report} replace />} />
           <Route path="*" element={<Navigate to={PAGE_PATHS.report} replace />} />

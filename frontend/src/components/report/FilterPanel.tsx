@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Filter, X, ChevronDown } from 'lucide-react'
+import { Filter, X, ChevronDown, Search as SearchIcon, Zap, AlignLeft } from 'lucide-react'
 import { cn, formatCategoryName, intensityLabel } from '@/lib/utils'
 import type { Filters, Rule } from '@/types'
 import { fetchKeywords, fetchFilterCounts, type FilterCounts } from '@/api/report'
@@ -22,6 +22,9 @@ interface Props {
   filters: Filters
   onChange: (f: Partial<Filters>) => void
   rules: Rule[]
+  searchQuery?: string
+  searchMode?: 'semantic' | 'text'
+  onSearchChange?: (q: string, mode: 'semantic' | 'text') => void
 }
 
 function MultiSelect({
@@ -174,10 +177,15 @@ function RangeFilter({
 
 const EMPTY_COUNTS: FilterCounts = { sources: {}, categories: {}, keywords: {}, intensities: {} }
 
-export default function FilterPanel({ filters, onChange, rules }: Props) {
+export default function FilterPanel({ filters, onChange, rules, searchQuery = '', searchMode = 'semantic', onSearchChange }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
   const [counts, setCounts] = useState<FilterCounts>(EMPTY_COUNTS)
+  const [queryInput, setQueryInput] = useState(searchQuery)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setQueryInput(searchQuery)
+  }, [searchQuery])
 
   useEffect(() => {
     fetchKeywords().then(setKeywords)
@@ -214,14 +222,28 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
     filters.confidence_min !== null || filters.confidence_max !== null ? 1 : 0,
     filters.date_from ? 1 : 0,
     filters.date_to ? 1 : 0,
+    searchQuery.trim() ? 1 : 0,
   ].reduce((a, b) => a + b, 0)
 
-  const clearAll = () =>
+  const clearAll = () => {
     onChange({
       sources: [], categories: [], keywords: [], intensities: [],
       confidence_min: null, confidence_max: null,
       date_from: '', date_to: '',
     })
+    onSearchChange?.('', searchMode)
+  }
+
+  // Apply current search on blur (including empty = clear search)
+  const applySearchOnBlur = () => {
+    if (onSearchChange) onSearchChange(queryInput.trim(), searchMode)
+  }
+
+  const runSearch = () => {
+    if (queryInput.trim().length >= 2 && onSearchChange) {
+      onSearchChange(queryInput.trim(), searchMode)
+    }
+  }
 
   return (
     <div
@@ -232,6 +254,65 @@ export default function FilterPanel({ filters, onChange, rules }: Props) {
         <Filter size={12} />
         Filters
       </span>
+
+      {/* Search */}
+      {onSearchChange && (
+        <>
+          <div className="flex rounded-md border overflow-hidden shrink-0" style={{ borderColor: 'var(--border)' }}>
+            <button
+              type="button"
+              onClick={() => onSearchChange(queryInput, 'semantic')}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors',
+                searchMode === 'semantic' ? 'text-white' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]',
+              )}
+              style={searchMode === 'semantic' ? { background: 'var(--accent)' } : {}}
+              title="Semantic search"
+            >
+              <Zap size={11} />
+              Semantic
+            </button>
+            <button
+              type="button"
+              onClick={() => onSearchChange(queryInput, 'text')}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors border-l',
+                searchMode === 'text' ? 'text-white' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]',
+              )}
+              style={{
+                ...(searchMode === 'text' ? { background: 'var(--accent)' } : {}),
+                borderColor: 'var(--border)',
+              }}
+              title="Text search (title/body)"
+            >
+              <AlignLeft size={11} />
+              Text
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5 flex-1 min-w-[180px] max-w-[280px]">
+            <input
+              type="text"
+              className="input flex-1 py-1 text-xs"
+              placeholder={searchMode === 'semantic' ? 'Search by meaning…' : 'Search in title/body…'}
+              value={queryInput}
+              onChange={e => setQueryInput(e.target.value)}
+              onBlur={applySearchOnBlur}
+              onKeyDown={e => e.key === 'Enter' && runSearch()}
+            />
+            <button
+              type="button"
+              onClick={runSearch}
+              disabled={queryInput.trim().length < 2}
+              className="btn btn-primary py-1 px-2 shrink-0"
+              title="Search"
+            >
+              <SearchIcon size={12} />
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="w-px h-4 shrink-0" style={{ background: 'var(--border)' }} />
 
       {/* Date range */}
       <div className="flex items-center gap-1">

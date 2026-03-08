@@ -1,6 +1,6 @@
 /**
  * Serialize/parse URL search params for pages and filters.
- * All pages use ?lang=ru. Report uses filter params, Search uses q & mode, Logs use worker & level.
+ * Report uses filter params + q & search_mode for search. Logs use worker & level.
  */
 
 import type { Filters } from '@/types'
@@ -44,19 +44,18 @@ export function filtersToSearchParams(f: Filters): URLSearchParams {
   return p
 }
 
-export type Page = 'report' | 'charts' | 'search' | 'logs'
+export type Page = 'report' | 'charts' | 'logs'
 
 export const PAGE_PATHS: Record<Page, string> = {
   report: '/report',
   charts: '/charts',
-  search: '/search',
   logs: '/logs',
 }
 
 export function pageFromPath(pathname: string): Page {
   if (pathname.startsWith('/report')) return 'report'
   if (pathname.startsWith('/charts')) return 'charts'
-  if (pathname.startsWith('/search')) return 'search'
+  if (pathname.startsWith('/search')) return 'report'
   if (pathname.startsWith('/logs')) return 'logs'
   return 'report'
 }

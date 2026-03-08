@@ -17,6 +17,8 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     () => filtersFromSearchParams(searchParams),
     [searchParams.toString()]
   )
+  const searchQuery = searchParams.get('q') ?? ''
+  const searchMode = (searchParams.get('search_mode') === 'text' ? 'text' : 'semantic') as 'semantic' | 'text'
 
   const [categories, setCategories] = useState<Category[]>([])
   const [rules, setRules] = useState<Rule[]>([])
@@ -29,7 +31,13 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchReport(filters)
+      const data = await fetchReport(
+        filters,
+        'avg_rank_score',
+        'desc',
+        searchQuery.trim() || undefined,
+        searchQuery.trim() ? searchMode : undefined,
+      )
       setCategories(data.categories)
       setTotal(data.total_signals)
     } catch (e) {
@@ -37,7 +45,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     } finally {
       setLoading(false)
     }
-  }, [filters])
+  }, [filters, searchQuery, searchMode])
 
   useEffect(() => {
     load()
@@ -72,11 +80,26 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     }, { replace: true })
   }, [filters, setSearchParams])
 
+  const updateSearch = useCallback((q: string, mode: 'semantic' | 'text') => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (q.trim()) next.set('q', q.trim())
+      else next.delete('q')
+      if (mode === 'text') next.set('search_mode', 'text')
+      else next.delete('search_mode')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
+  const subtitle = searchQuery.trim()
+    ? `${total.toLocaleString()} results for "${searchQuery}" · ${categories.length} categories`
+    : `${(stats?.relevant_total ?? total).toLocaleString()} relevant signals · ${categories.length} categories`
+
   return (
     <div className="flex flex-col h-full">
       <PageHeader
         title="Signals"
-        subtitle={`${(stats?.relevant_total ?? total).toLocaleString()} relevant signals · ${categories.length} categories`}
+        subtitle={subtitle}
         action={
           <button onClick={load} disabled={loading} className="btn btn-ghost">
             {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
@@ -87,7 +110,14 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
       <PipelineStrip stats={stats} totalSignals={stats?.relevant_total ?? 0} />
 
       {/* Filters */}
-      <FilterPanel filters={filters} onChange={updateFilters} rules={rules} />
+      <FilterPanel
+        filters={filters}
+        onChange={updateFilters}
+        rules={rules}
+        searchQuery={searchQuery}
+        searchMode={searchMode}
+        onSearchChange={updateSearch}
+      />
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
@@ -107,7 +137,14 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
             No signals found for current filters.
           </div>
         ) : (
-          <SignalTable categories={categories} filters={filters} lang={lang} rules={rules} />
+          <SignalTable
+            categories={categories}
+            filters={filters}
+            lang={lang}
+            rules={rules}
+            searchQuery={searchQuery.trim() || undefined}
+            searchMode={searchQuery.trim() ? searchMode : undefined}
+          />
         )}
       </div>
     </div>

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Query, Request
 
 from storage.config_manager import ConfigManager
 from web_server.db import fetchall, fetchone
+from web_server.routers.search import get_search_result_ids
 from web_server.services.clustering import (
     build_cluster_key,
     fetch_vectors,
@@ -227,8 +228,10 @@ async def get_report(
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
     sort_by: str = Query("rank_score"),
     sort_dir: str = Query("desc"),
+    q: str | None = Query(None),
+    search_mode: str | None = Query(None),
 ):
-    """Return level-1 category aggregates (no clustering)."""
+    """Return level-1 category aggregates (no clustering). Optional q + search_mode restrict to search results."""
     cache = request.app.state.cache
     cache_key = dict(
         date_from=date_from, date_to=date_to, sources=sorted(sources),
@@ -236,6 +239,7 @@ async def get_report(
         intensities=sorted(intensities),
         confidence_min=confidence_min, confidence_max=confidence_max,
         sort_by=sort_by, sort_dir=sort_dir,
+        q=(q or "").strip(), search_mode=search_mode or "",
     )
     cached = cache.get("report", cache_key)
     if cached is not None:
@@ -245,6 +249,25 @@ async def get_report(
         date_from, date_to, sources, intensities,
         confidence_min, confidence_max, keywords,
     )
+    search_ids: list[str] = []
+    if (q or "").strip() and search_mode in ("semantic", "text"):
+        search_ids = get_search_result_ids(
+            q=q.strip(),
+            search_mode=search_mode,
+            sources=sources,
+            keywords=keywords,
+            intensities=intensities,
+            confidence_min=confidence_min,
+            confidence_max=confidence_max,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not search_ids:
+            result = {"total_signals": 0, "categories": []}
+            cache.set("report", cache_key, value=result, ttl=REPORT_CACHE_TTL)
+            return result
+        where = where + " AND p.raw_signal_id = ANY(%s)"
+        params = list(params) + [search_ids]
     rows = _fetch_signals(where, params)
     groups = _aggregate_signals(rows, categories)
 
@@ -270,14 +293,17 @@ async def get_clusters(
     intensities: list[int] = Query(default=[]),
     confidence_min: float | None = Query(None, ge=0.0, le=1.0),
     confidence_max: float | None = Query(None, ge=0.0, le=1.0),
+    q: str | None = Query(None),
+    search_mode: str | None = Query(None),
 ):
-    """Return level-2 clusters for a specific category (with LLM naming, cached 24h)."""
+    """Return level-2 clusters for a specific category (with LLM naming, cached 24h). Optional q + search_mode restrict to search results."""
     cache = request.app.state.cache
     cache_key = dict(
         category=category, date_from=date_from, date_to=date_to,
         sources=sorted(sources), keywords=sorted(keywords),
         intensities=sorted(intensities),
         confidence_min=confidence_min, confidence_max=confidence_max,
+        q=(q or "").strip(), search_mode=search_mode or "",
     )
     cached = cache.get("clusters", cache_key)
     if cached is not None:
@@ -287,6 +313,24 @@ async def get_clusters(
         date_from, date_to, sources, intensities,
         confidence_min, confidence_max, keywords,
     )
+    if (q or "").strip() and search_mode in ("semantic", "text"):
+        search_ids = get_search_result_ids(
+            q=q.strip(),
+            search_mode=search_mode,
+            sources=sources,
+            keywords=keywords,
+            intensities=intensities,
+            confidence_min=confidence_min,
+            confidence_max=confidence_max,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not search_ids:
+            result = {"clusters": []}
+            cache.set("clusters", cache_key, value=result, ttl=REPORT_CACHE_TTL)
+            return result
+        where = where + " AND p.raw_signal_id = ANY(%s)"
+        params = list(params) + [search_ids]
     rows = _fetch_signals(where, params)
     groups = _aggregate_signals(rows, [category])
 

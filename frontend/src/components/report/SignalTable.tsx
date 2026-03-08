@@ -351,6 +351,8 @@ function CategoryRow({
   filters,
   lang = 'en',
   rules = [],
+  searchQuery,
+  searchMode,
 }: {
   category: Category
   maxRankScore: number
@@ -360,6 +362,8 @@ function CategoryRow({
   filters: Filters
   lang?: string
   rules?: Rule[]
+  searchQuery?: string
+  searchMode?: 'semantic' | 'text'
 }) {
   const [expanded, setExpanded] = useState(false)
   const [clusters, setClusters] = useState<Cluster[] | null>(null)
@@ -371,14 +375,14 @@ function CategoryRow({
     if (!expanded && clusters === null) {
       setLoading(true)
       try {
-        const data = await fetchClusters(category.name, filters)
+        const data = await fetchClusters(category.name, filters, searchQuery, searchMode)
         setClusters(data.clusters)
       } finally {
         setLoading(false)
       }
     }
     setExpanded(prev => !prev)
-  }, [expanded, clusters, category.name, filters])
+  }, [expanded, clusters, category.name, filters, searchQuery, searchMode])
 
   const handleClusterSort = (col: string) => {
     if (col === clusterSort) setClusterSortDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -457,9 +461,11 @@ interface TableProps {
   filters: Filters
   lang?: string
   rules?: Rule[]
+  searchQuery?: string
+  searchMode?: 'semantic' | 'text'
 }
 
-export default function SignalTable({ categories, filters, lang = 'en', rules = [] }: TableProps) {
+export default function SignalTable({ categories, filters, lang = 'en', rules = [], searchQuery, searchMode }: TableProps) {
   const [sortBy, setSortBy] = useState<SortKey>('rank_score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -544,6 +550,8 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
               filters={filters}
               lang={lang}
               rules={rules}
+              searchQuery={searchQuery}
+              searchMode={searchMode}
             />
           ))}
         </tbody>

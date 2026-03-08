@@ -27,8 +27,13 @@ export async function fetchReport(
   filters: Partial<Filters> = {},
   sortBy = 'avg_rank_score',
   sortDir = 'desc',
+  searchQuery?: string,
+  searchMode?: 'semantic' | 'text',
 ): Promise<ReportResponse> {
-  const qs = buildQueryString({ ...filtersToParams(filters), sort_by: sortBy, sort_dir: sortDir })
+  const params: Record<string, unknown> = { ...filtersToParams(filters), sort_by: sortBy, sort_dir: sortDir }
+  if (searchQuery?.trim()) params.q = searchQuery.trim()
+  if (searchMode === 'text' || searchMode === 'semantic') params.search_mode = searchMode
+  const qs = buildQueryString(params)
   const res = await fetch(`/api/report?${qs}`)
   if (!res.ok) throw new Error(`Report fetch failed: ${res.status}`)
   return res.json()
@@ -37,8 +42,13 @@ export async function fetchReport(
 export async function fetchClusters(
   category: string,
   filters: Partial<Filters> = {},
+  searchQuery?: string,
+  searchMode?: 'semantic' | 'text',
 ): Promise<ClustersResponse> {
-  const qs = buildQueryString({ ...filtersToParams(filters), category })
+  const params: Record<string, unknown> = { ...filtersToParams(filters), category }
+  if (searchQuery?.trim()) params.q = searchQuery.trim()
+  if (searchMode === 'text' || searchMode === 'semantic') params.search_mode = searchMode
+  const qs = buildQueryString(params)
   const res = await fetch(`/api/report/clusters?${qs}`)
   if (!res.ok) throw new Error(`Clusters fetch failed: ${res.status}`)
   return res.json()
