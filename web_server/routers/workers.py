@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from storage.config_manager import ConfigManager
-from web_server.db import execute, fetchall, fetchone
+from web_server.db import execute, execute_update, fetchall, fetchone
 
 log = logging.getLogger(__name__)
 
@@ -412,6 +412,22 @@ async def post_recollect(body: dict[str, Any]):
         "keywords": to_insert,
         "message": f"Recollect queued for {len(to_insert)} keyword(s)",
     }
+
+
+@router.post("/retry-failed")
+async def post_retry_failed():
+    """
+    Reset all failed LLM queue tasks to pending so the worker retries them.
+    Returns the number of tasks reset.
+    """
+    count = execute_update(
+        """
+        UPDATE llm_task_queue
+        SET status = 'pending', retry_count = 0, error = NULL, started_at = NULL
+        WHERE status = 'failed'
+        """
+    )
+    return {"status": "ok", "reset": count, "message": f"{count} failed task(s) reset to pending."}
 
 
 @router.post("/restart")

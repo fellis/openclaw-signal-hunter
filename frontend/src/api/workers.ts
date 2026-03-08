@@ -37,6 +37,15 @@ export async function clearWorkersLogs(): Promise<{ status: string }> {
   return res.json()
 }
 
+export async function retryFailedWorkers(): Promise<{ status: string; reset: number; message?: string }> {
+  const res = await fetch('/api/workers/retry-failed', { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail ?? `Retry failed: ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function restartWorkers(): Promise<{ status: string; message?: string }> {
   const res = await fetch('/api/workers/restart', { method: 'POST' })
   if (!res.ok) {

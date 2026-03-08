@@ -57,3 +57,11 @@ def execute(sql: str, params: tuple | list = ()) -> None:
     with get_conn() as conn:
         with dict_cursor(conn) as cur:
             cur.execute(sql, params)
+
+
+def execute_update(sql: str, params: tuple | list = ()) -> int:
+    """Execute UPDATE/DELETE and return the number of rows affected."""
+    with get_conn() as conn:
+        with dict_cursor(conn) as cur:
+            cur.execute(sql, params)
+            return cur.rowcount

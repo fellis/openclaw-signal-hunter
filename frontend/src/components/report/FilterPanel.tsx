@@ -28,7 +28,7 @@ interface Props {
 }
 
 function MultiSelect({
-  label, options, selected, onChange, labelMap, counts, keepOrder,
+  label, options, selected, onChange, labelMap, counts, keepOrder, searchable,
 }: {
   label: string
   options: string[]
@@ -37,8 +37,10 @@ function MultiSelect({
   labelMap?: Record<string, string>
   counts?: Record<string, number>
   keepOrder?: boolean
+  searchable?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const toggle = (v: string) =>
     onChange(selected.includes(v) ? selected.filter(s => s !== v) : [...selected, v])
 
@@ -51,10 +53,18 @@ function MultiSelect({
     return a.localeCompare(b)
   })
 
+  const searchLower = search.trim().toLowerCase()
+  const filtered = searchable && searchLower
+    ? sorted.filter(opt => (labelMap?.[opt] ?? opt).toLowerCase().includes(searchLower))
+    : sorted
+
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open && searchable) setSearch('')
+          setOpen(!open)
+        }}
         className={cn(
           'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border transition-colors',
           selected.length > 0
@@ -75,29 +85,49 @@ function MultiSelect({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div
-            className="absolute top-full left-0 mt-1 z-20 min-w-52 rounded-md border shadow-xl py-1 max-h-64 overflow-y-auto"
+            className="absolute top-full left-0 mt-1 z-20 min-w-52 rounded-md border shadow-xl py-1 max-h-64 overflow-hidden flex flex-col"
             style={{ background: 'var(--bg-2)', borderColor: 'var(--border)' }}
           >
-            {sorted.map(opt => (
-              <label
-                key={opt}
-                className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-3)] text-xs"
-                style={{ color: 'var(--text)' }}
-              >
+            {searchable && (
+              <div className="px-2 py-1.5 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
                 <input
-                  type="checkbox"
-                  checked={selected.includes(opt)}
-                  onChange={() => toggle(opt)}
-                  className="accent-[var(--accent)] w-3 h-3"
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  onKeyDown={e => e.stopPropagation()}
+                  placeholder="Search…"
+                  className="input w-full py-1 text-xs"
                 />
-                <span className="flex-1">{labelMap?.[opt] ?? opt}</span>
-                {counts && counts[opt] !== undefined && (
-                  <span className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                    {counts[opt].toLocaleString()}
-                  </span>
-                )}
-              </label>
-            ))}
+              </div>
+            )}
+            <div className="overflow-y-auto min-h-0 py-1">
+              {filtered.length === 0 ? (
+                <div className="px-3 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {searchable && searchLower ? 'No match' : 'None'}
+                </div>
+              ) : (
+                filtered.map(opt => (
+                  <label
+                    key={opt}
+                    className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-3)] text-xs"
+                    style={{ color: 'var(--text)' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(opt)}
+                      onChange={() => toggle(opt)}
+                      className="accent-[var(--accent)] w-3 h-3"
+                    />
+                    <span className="flex-1">{labelMap?.[opt] ?? opt}</span>
+                    {counts && counts[opt] !== undefined && (
+                      <span className="text-2xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                        {counts[opt].toLocaleString()}
+                      </span>
+                    )}
+                  </label>
+                ))
+              )}
+            </div>
           </div>
         </>
       )}
@@ -357,6 +387,7 @@ export default function FilterPanel({ filters, onChange, rules, searchQuery = ''
         selected={filters.keywords}
         onChange={v => onChange({ keywords: v })}
         counts={counts.keywords}
+        searchable
       />
       <MultiSelect
         label="Intensity"

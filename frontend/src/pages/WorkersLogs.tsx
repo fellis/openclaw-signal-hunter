@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { RefreshCw, Loader2, Trash2, Pause, Play, RotateCw } from 'lucide-react'
+import { RefreshCw, Loader2, Trash2, Pause, Play, RotateCw, RotateCcw } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import PipelineStrip from '@/components/layout/PipelineStrip'
 import { fetchStats } from '@/api/report'
-import { fetchWorkerStatus, fetchWorkerLogs, clearWorkersLogs, restartWorkers } from '@/api/workers'
+import { fetchWorkerStatus, fetchWorkerLogs, clearWorkersLogs, restartWorkers, retryFailedWorkers } from '@/api/workers'
 import type { StatsResponse } from '@/types'
 import type { WorkerStatusResponse, WorkerLogLine } from '@/types'
 
@@ -48,6 +48,7 @@ export default function WorkersLogs() {
   }, [setSearchParams])
   const [loading, setLoading] = useState(false)
   const [restarting, setRestarting] = useState(false)
+  const [retryingFailed, setRetryingFailed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
@@ -210,9 +211,35 @@ export default function WorkersLogs() {
             </span>
           </div>
           <div className="flex flex-wrap gap-4 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <span>
+            <span className="flex items-center gap-1">
               LLM: pending {status.llm_queue.pending} · running {status.llm_queue.running} · failed{' '}
               {status.llm_queue.failed}
+              {status.llm_queue.failed > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setRetryingFailed(true)
+                    setError(null)
+                    try {
+                      const data = await retryFailedWorkers()
+                      if (data.reset != null) await loadStatus()
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : 'Retry failed')
+                    } finally {
+                      setRetryingFailed(false)
+                    }
+                  }}
+                  disabled={retryingFailed}
+                  className="inline-flex items-center justify-center p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-50"
+                  title="Reset failed LLM tasks to pending"
+                >
+                  {retryingFailed ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <RotateCcw size={12} />
+                  )}
+                </button>
+              )}
             </span>
             <span>Embed: unprocessed {status.embed_worker.unprocessed} · borderline {status.embed_worker.borderline_pending}</span>
             <span>Collect next: {status.collect_worker.next_keyword ?? '—'}</span>
