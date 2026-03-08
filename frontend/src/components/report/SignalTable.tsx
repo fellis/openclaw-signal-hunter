@@ -158,7 +158,7 @@ function SignalRow({ signal, lang = 'en' }: { signal: Signal; lang?: string }) {
       <td className="pl-16 pr-3 py-2.5 w-0">
         <div className="w-1" />
       </td>
-      <td className="pr-4 py-2.5" style={{ minWidth: 320 }}>
+      <td className="pr-4 py-2.5">
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
             <Tooltip text={signal.title_original || signal.title}>
@@ -291,14 +291,14 @@ function ClusterRow({
         style={{ borderColor: 'var(--border)' }}
         onClick={expand}
       >
-        <td className="pl-10 pr-3 py-2.5 w-0">
+        <td className="pl-10 pr-3 py-2.5 w-0" style={{ minHeight: 40 }}>
           <ChevronRight
             size={13}
             className="transition-transform"
             style={{ color: 'var(--text-muted)', transform: expanded ? 'rotate(90deg)' : undefined }}
           />
         </td>
-        <td className="pr-4 py-2.5" style={{ minWidth: 320 }}>
+        <td className="pr-4 py-2.5" style={{ minHeight: 40 }}>
           <div className="flex items-center gap-2 min-w-0">
             <Tooltip text={cluster.name}>
               <span className="font-medium text-xs truncate" style={{ color: 'var(--text-2)' }}>
@@ -396,14 +396,14 @@ function CategoryRow({
         style={{ borderColor: 'var(--border)' }}
         onClick={expand}
       >
-        <td className="pl-4 pr-3 py-2.5 w-0">
+        <td className="pl-4 pr-3 py-2.5 w-0" style={{ minHeight: 40 }}>
           <ChevronRight
             size={13}
             className="transition-transform"
             style={{ color: 'var(--text-muted)', transform: expanded ? 'rotate(90deg)' : undefined }}
           />
         </td>
-        <td className="pr-4 py-2.5" style={{ minWidth: 320 }}>
+        <td className="pr-4 py-2.5" style={{ minHeight: 40 }}>
           <div className="flex items-center gap-2">
             <CategoryBadge name={category.name} rules={rules} />
             <span className="text-2xs font-medium" style={{ color: 'var(--text-muted)' }}>
@@ -497,11 +497,24 @@ export default function SignalTable({ categories, filters, lang = 'en', rules = 
 
   return (
     <div className="overflow-x-auto" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
-      <table className="w-full border-collapse">
+      <table className="w-full border-collapse" style={{ tableLayout: 'fixed' }}>
+        <colgroup>
+          <col style={{ width: 32 }} />
+          <col style={{ width: 'min(380px, 32%)' }} />
+          <col style={{ width: 140 }} />
+          <col style={{ width: 90 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 88 }} />
+          <col style={{ width: 88 }} />
+        </colgroup>
         <thead>
           <tr>
             <th className="w-0 pl-4 py-2.5" style={thStyle} />
-            <th className="text-left pl-0 pr-4 py-2.5" style={{ ...thStyle, minWidth: 320 }}>
+            <th className="text-left pl-0 pr-4 py-2.5" style={thStyle}>
               <SortHeader label="Category / Cluster / Signal" col="count" {...colProps} />
             </th>
             <th className="text-left pr-4 py-2.5" style={thStyle}>
