@@ -70,7 +70,7 @@ class LLMRouter:
         self._usage_logger = usage_logger
 
         self._anthropic_client = None
-        self._openai_client = None
+        self._openai_clients: dict[str, Any] = {}  # per-operation for X-Signal-Hunter-Operation header
 
     # ------------------------------------------------------------------
     # Public API
@@ -218,7 +218,8 @@ class LLMRouter:
         import httpx  # noqa: PLC0415
         from openai import OpenAI  # noqa: PLC0415
 
-        if self._openai_client is None:
+        client = self._openai_clients.get(call.operation)
+        if client is None:
             base_url = os.environ.get("LOCAL_LLM_BASE_URL")
             api_key = os.environ.get("LOCAL_LLM_API_KEY", "local")
             if not base_url:
@@ -227,15 +228,19 @@ class LLMRouter:
                     "Local LLM config must be in .env, not in config.json."
                 )
             ssl_verify = os.environ.get("LOCAL_LLM_SSL_VERIFY", "true").lower() != "false"
-            self._openai_client = OpenAI(
+            client = OpenAI(
                 api_key=api_key,
                 base_url=base_url,
                 timeout=500.0,
-                http_client=httpx.Client(verify=ssl_verify),
+                http_client=httpx.Client(
+                    verify=ssl_verify,
+                    headers={"X-Signal-Hunter-Operation": call.operation},
+                ),
             )
-            self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
+            self._openai_clients[call.operation] = client
+        self._local_model = os.environ.get("LOCAL_LLM_MODEL", "llm")
 
-        response = self._openai_client.chat.completions.create(
+        response = client.chat.completions.create(
             model=self._local_model,
             messages=call.messages,
             temperature=call.temperature,
