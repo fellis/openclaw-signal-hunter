@@ -222,6 +222,51 @@ class PostgresStorage:
                 )
                 return cur.fetchone()["n"]
 
+    def count_raw_signals_for_keywords(self, keywords: list[str]) -> dict[str, int]:
+        """
+        Return per-keyword counts of raw_signals whose extra->'keywords' contains that keyword.
+        Used by test_15_keywords_vps to report how many signals exist for each of the 15 keywords.
+        """
+        if not keywords:
+            return {}
+        result: dict[str, int] = {kw: 0 for kw in keywords}
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                for kw in keywords:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS n FROM raw_signals
+                        WHERE extra->'keywords' @> %s::jsonb
+                        """,
+                        (json.dumps([kw]),),
+                    )
+                    result[kw] = cur.fetchone()["n"]
+        return result
+
+    def fetch_raw_signals_for_keywords(
+        self, keywords: list[str], limit: int = 5000
+    ) -> list[dict[str, Any]]:
+        """
+        Return raw_signals whose extra->'keywords' overlaps with the given list.
+        Fields: id, dedup_key, title, body, extra (for classification readiness check).
+        """
+        if not keywords:
+            return []
+        keywords_json = json.dumps(keywords)
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT id, dedup_key, title, body, extra
+                    FROM raw_signals
+                    WHERE (extra->'keywords') && %s::jsonb
+                    ORDER BY collected_at DESC
+                    LIMIT %s
+                    """,
+                    (keywords_json, limit),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
     # ------------------------------------------------------------------
     # Processed signals
     # ------------------------------------------------------------------
