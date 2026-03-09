@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 TRANSLATOR_URL    = os.environ.get("TRANSLATOR_URL", "https://llm.aegisalpha.io/translator")
 TRANSLATOR_API_KEY = os.environ.get("LOCAL_LLM_API_KEY", "")
+TRANSLATOR_TIMEOUT_SEC = float(os.environ.get("TRANSLATOR_TIMEOUT_SEC", "600"))
 TARGET_LANG       = os.environ.get("TRANSLATE_TARGET_LANG", "ru")
 BATCH_SIZE        = int(os.environ.get("TRANSLATE_BATCH_SIZE", "32"))
 # External translator API limit (e.g. llm.aegisalpha.io: "Batch too large: max 32 texts per request")
@@ -178,7 +179,7 @@ class TranslateWorker:
                 f"{TRANSLATOR_URL}/translate",
                 json={"texts": list(payloads), "target_lang": TARGET_LANG},
                 headers=headers,
-                timeout=300.0,
+                timeout=TRANSLATOR_TIMEOUT_SEC,
             )
             resp.raise_for_status()
             data = resp.json()
