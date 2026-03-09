@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+import json_repair
 import time
 from typing import Any
 
@@ -343,10 +345,10 @@ class LLMWorker:
         raw_response = router.complete(call).strip()
 
         try:
-            parsed = json.loads(raw_response)
-            is_relevant = bool(parsed.get("relevant", False))
-        except (json.JSONDecodeError, AttributeError):
-            log.warning("[llm_worker] borderline: could not parse LLM response for %s: %r", dedup_key, raw_response)
+            parsed = json_repair.loads(raw_response)
+            is_relevant = bool(parsed.get("relevant", False)) if isinstance(parsed, dict) else False
+        except Exception:
+            log.warning("[llm_worker] borderline: could not parse LLM response for %s: %r", dedup_key, raw_response[:200])
             is_relevant = False
 
         if is_relevant:
@@ -428,10 +430,10 @@ class LLMWorker:
             raw_response = raw_response.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
         try:
-            parsed_list = json.loads(raw_response)
+            parsed_list = json_repair.loads(raw_response)
             if not isinstance(parsed_list, list):
                 parsed_list = []
-        except (json.JSONDecodeError, AttributeError):
+        except Exception:
             log.warning("[llm_worker] borderline batch: could not parse LLM response: %r", raw_response[:200])
             return [{"error": "batch parse failed"} for _ in tasks]
 
@@ -508,14 +510,10 @@ class LLMWorker:
                 raw = router.complete(call).strip()
                 if raw.startswith("```"):
                     raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                summaries = json.loads(raw)
+                summaries = json_repair.loads(raw)
             except Exception:
-                try:
-                    recovered = raw.rstrip(", \n") + '"]'
-                    summaries = json.loads(recovered)
-                except Exception:
-                    log.warning("[llm_worker] summary parse failed for batch %d, skipping", i)
-                    continue
+                log.warning("[llm_worker] summary parse failed for batch %d, skipping", i)
+                continue
 
             if not isinstance(summaries, list):
                 continue
