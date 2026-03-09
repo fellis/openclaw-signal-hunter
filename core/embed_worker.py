@@ -88,9 +88,10 @@ class EmbedWorker:
         backfill_per_tick = int(proc_cfg.get("backfill_rule_match_per_tick", 256))
         backfill_done = 0
         if backfill_per_tick > 0:
+            log.info("[embed_worker] backfill matched_rules: starting batch (limit=%d)", backfill_per_tick)
             backfill_done = processor.run_backfill_rule_match_batch(backfill_per_tick)
             if backfill_done:
-                log.info("[embed_worker] backfill matched_rules: %d signals", backfill_done)
+                log.info("[embed_worker] backfill matched_rules: %d signals done", backfill_done)
 
         remaining = self._storage.count_unprocessed()
         log.info("[embed_worker] done: classified=%d remaining=%d", total, remaining)
