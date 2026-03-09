@@ -8,6 +8,8 @@ export async function semanticSearch(
   threshold = 0.45,
   lang = 'en',
 ): Promise<{ results: SearchResult[]; total: number; query: string }> {
+  const clamp01 = (v: number | null | undefined) =>
+    v == null ? '' : Math.max(0, Math.min(1, v))
   const qs = buildQueryString({
     q,
     top_k: topK,
@@ -15,8 +17,8 @@ export async function semanticSearch(
     sources: filters.sources || [],
     keywords: filters.keywords || [],
     intensities: filters.intensities || [],
-    confidence_min: filters.confidence_min ?? '',
-    confidence_max: filters.confidence_max ?? '',
+    confidence_min: clamp01(filters.confidence_min),
+    confidence_max: clamp01(filters.confidence_max),
     date_from: filters.date_from || '',
     date_to: filters.date_to || '',
     lang,

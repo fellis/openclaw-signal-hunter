@@ -68,6 +68,13 @@ def _parse_matched_rules(raw: Any) -> list[dict]:
     return []
 
 
+def _clamp_confidence(v: float | None) -> float | None:
+    """Ensure confidence is in [0, 1] to avoid invalid query params and downstream 502."""
+    if v is None:
+        return None
+    return max(0.0, min(1.0, float(v)))
+
+
 # Priority order for deduplication: more specific categories win over broader ones.
 # When a signal matches multiple categories with equal confidence, the one with
 # the lowest priority index is selected as the primary category.
@@ -232,6 +239,8 @@ async def get_report(
     search_mode: str | None = Query(None),
 ):
     """Return level-1 category aggregates (no clustering). Optional q + search_mode restrict to search results."""
+    confidence_min = _clamp_confidence(confidence_min)
+    confidence_max = _clamp_confidence(confidence_max)
     cache = request.app.state.cache
     cache_key = dict(
         date_from=date_from, date_to=date_to, sources=sorted(sources),
@@ -297,6 +306,8 @@ async def get_clusters(
     search_mode: str | None = Query(None),
 ):
     """Return level-2 clusters for a specific category (with LLM naming, cached 24h). Optional q + search_mode restrict to search results."""
+    confidence_min = _clamp_confidence(confidence_min)
+    confidence_max = _clamp_confidence(confidence_max)
     cache = request.app.state.cache
     cache_key = dict(
         category=category, date_from=date_from, date_to=date_to,
@@ -577,6 +588,8 @@ async def get_filter_counts(
     after selecting that value.
     Returns: { sources, categories, keywords, intensities } each as {name: count}.
     """
+    confidence_min = _clamp_confidence(confidence_min)
+    confidence_max = _clamp_confidence(confidence_max)
     cache = request.app.state.cache
     cache_key = dict(
         date_from=date_from, date_to=date_to,

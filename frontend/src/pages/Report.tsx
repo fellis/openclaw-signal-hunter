@@ -91,6 +91,11 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
     }, { replace: true })
   }, [setSearchParams])
 
+  // Single URL update to clear all filters and search (avoids race with two setSearchParams)
+  const clearAllFiltersAndSearch = useCallback(() => {
+    setSearchParams(new URLSearchParams(), { replace: true })
+  }, [setSearchParams])
+
   const subtitle = searchQuery.trim()
     ? `${total.toLocaleString()} results for "${searchQuery}" · ${categories.length} categories`
     : `${(stats?.relevant_total ?? total).toLocaleString()} relevant signals · ${categories.length} categories`
@@ -117,6 +122,7 @@ export default function Report({ lang = 'en' }: { lang?: string }) {
         searchQuery={searchQuery}
         searchMode={searchMode}
         onSearchChange={updateSearch}
+        onClearAll={clearAllFiltersAndSearch}
       />
 
       {/* Table */}

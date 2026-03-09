@@ -10,6 +10,9 @@ import type {
 } from '@/types'
 import { buildQueryString } from '@/lib/utils'
 
+const clampConfidence = (v: number | null | undefined): number | '' =>
+  v == null ? '' : Math.max(0, Math.min(1, v))
+
 function filtersToParams(f: Partial<Filters>): Record<string, unknown> {
   return {
     date_from: f.date_from || '',
@@ -18,8 +21,8 @@ function filtersToParams(f: Partial<Filters>): Record<string, unknown> {
     categories: f.categories || [],
     keywords: f.keywords || [],
     intensities: f.intensities || [],
-    confidence_min: f.confidence_min ?? '',
-    confidence_max: f.confidence_max ?? '',
+    confidence_min: clampConfidence(f.confidence_min),
+    confidence_max: clampConfidence(f.confidence_max),
   }
 }
 

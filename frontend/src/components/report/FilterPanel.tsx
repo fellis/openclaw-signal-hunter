@@ -25,6 +25,8 @@ interface Props {
   searchQuery?: string
   searchMode?: 'semantic' | 'text'
   onSearchChange?: (q: string, mode: 'semantic' | 'text') => void
+  /** When set, Clear uses this so filters + search are cleared in one URL update */
+  onClearAll?: () => void
 }
 
 function MultiSelect({
@@ -207,7 +209,7 @@ function RangeFilter({
 
 const EMPTY_COUNTS: FilterCounts = { sources: {}, categories: {}, keywords: {}, intensities: {} }
 
-export default function FilterPanel({ filters, onChange, rules, searchQuery = '', searchMode = 'semantic', onSearchChange }: Props) {
+export default function FilterPanel({ filters, onChange, rules, searchQuery = '', searchMode = 'semantic', onSearchChange, onClearAll }: Props) {
   const [keywords, setKeywords] = useState<string[]>([])
   const [counts, setCounts] = useState<FilterCounts>(EMPTY_COUNTS)
   const [queryInput, setQueryInput] = useState(searchQuery)
@@ -256,6 +258,11 @@ export default function FilterPanel({ filters, onChange, rules, searchQuery = ''
   ].reduce((a, b) => a + b, 0)
 
   const clearAll = () => {
+    if (onClearAll) {
+      onClearAll()
+      setQueryInput('')
+      return
+    }
     onChange({
       sources: [], categories: [], keywords: [], intensities: [],
       confidence_min: null, confidence_max: null,
@@ -401,10 +408,10 @@ export default function FilterPanel({ filters, onChange, rules, searchQuery = ''
       <RangeFilter
         label="Confidence"
         min={0} max={1} step={0.05}
-        valueMin={filters.confidence_min}
-        valueMax={filters.confidence_max}
-        onChangeMin={v => onChange({ confidence_min: v })}
-        onChangeMax={v => onChange({ confidence_max: v })}
+        valueMin={filters.confidence_min != null ? Math.max(0, Math.min(1, filters.confidence_min)) : null}
+        valueMax={filters.confidence_max != null ? Math.max(0, Math.min(1, filters.confidence_max)) : null}
+        onChangeMin={v => onChange({ confidence_min: v != null ? Math.max(0, Math.min(1, v)) : null })}
+        onChangeMax={v => onChange({ confidence_max: v != null ? Math.max(0, Math.min(1, v)) : null })}
       />
 
       {activeCount > 0 && (

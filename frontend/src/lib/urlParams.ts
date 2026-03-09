@@ -18,6 +18,8 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     const n = Number(v)
     return Number.isFinite(n) ? n : null
   }
+  const clamp01 = (n: number | null): number | null =>
+    n == null ? null : Math.max(0, Math.min(1, n))
   const ints = arr('intensities').map(Number).filter(Number.isFinite)
   return {
     date_from: params.get('date_from') ?? '',
@@ -26,8 +28,8 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     categories: arr('categories'),
     keywords: arr('keywords'),
     intensities: ints,
-    confidence_min: num('confidence_min'),
-    confidence_max: num('confidence_max'),
+    confidence_min: clamp01(num('confidence_min')),
+    confidence_max: clamp01(num('confidence_max')),
   }
 }
 
