@@ -252,18 +252,20 @@ class PostgresStorage:
         """
         if not keywords:
             return []
-        keywords_json = json.dumps(keywords)
         with self._conn() as conn:
             with self._cursor(conn) as cur:
                 cur.execute(
                     """
                     SELECT id, dedup_key, title, body, extra
                     FROM raw_signals
-                    WHERE (extra->'keywords') && CAST(%s AS jsonb)
+                    WHERE EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text(COALESCE(extra->'keywords', '[]'::jsonb)) AS kw
+                        WHERE kw = ANY(%s)
+                    )
                     ORDER BY collected_at DESC
                     LIMIT %s
                     """,
-                    (keywords_json, limit),
+                    (keywords, limit),
                 )
                 return [dict(row) for row in cur.fetchall()]
 
