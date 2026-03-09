@@ -45,6 +45,9 @@ class EmbedWorker:
         from core.orchestrator import load_rules
 
         unprocessed = self._storage.count_unprocessed()
+        if unprocessed == 0:
+            log.info("[embed_worker] no unprocessed signals, idle")
+            return {"status": "idle", "note": "No unprocessed signals."}
 
         rules = load_rules(self._config)
         if not rules:
@@ -52,19 +55,15 @@ class EmbedWorker:
             return {"status": "skipped", "note": "No extraction_rules defined."}
 
         processor = EmbedProcessor(self._storage, rules, self._config)
-        total = 0
-        if unprocessed > 0:
-            max_batches = self._config.get("processor", {}).get("max_batches_per_run", 5)
-            total = processor.process_all(max_batches=max_batches)
-            if total == -1:
-                log.warning("[embed_worker] another instance already running, skipping")
-                return {
-                    "status": "skipped",
-                    "note": "Another processing run is already active.",
-                    "remaining": unprocessed,
-                }
-        else:
-            log.info("[embed_worker] no unprocessed signals; running LLM rule-match and backfill passes only")
+        max_batches = self._config.get("processor", {}).get("max_batches_per_run", 5)
+        total = processor.process_all(max_batches=max_batches)
+        if total == -1:
+            log.warning("[embed_worker] another instance already running, skipping")
+            return {
+                "status": "skipped",
+                "note": "Another processing run is already active.",
+                "remaining": unprocessed,
+            }
 
         # Second pass: rule-match for LLM-relevant signals that have empty matched_rules
         proc_cfg = self._config.get("processor", {})
@@ -83,16 +82,6 @@ class EmbedWorker:
         if rule_matched:
             log.info("[embed_worker] LLM-relevant rule match: %d signals", rule_matched)
 
-        # Third pass: backfill matched_rules for any relevant signals with empty matched_rules
-        # (e.g. old auto-accept rows). One batch per tick to avoid timeouts; worker drains over time.
-        backfill_per_tick = int(proc_cfg.get("backfill_rule_match_per_tick", 256))
-        backfill_done = 0
-        if backfill_per_tick > 0:
-            log.info("[embed_worker] backfill matched_rules: starting batch (limit=%d)", backfill_per_tick)
-            backfill_done = processor.run_backfill_rule_match_batch(backfill_per_tick)
-            if backfill_done:
-                log.info("[embed_worker] backfill matched_rules: %d signals done", backfill_done)
-
         remaining = self._storage.count_unprocessed()
         log.info("[embed_worker] done: classified=%d remaining=%d", total, remaining)
         return {
@@ -100,5 +89,4 @@ class EmbedWorker:
             "total": total,
             "remaining": remaining,
             "llm_relevant_rule_matched": rule_matched,
-            "backfill_rule_matched": backfill_done,
         }

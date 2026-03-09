@@ -456,63 +456,6 @@ class EmbedProcessor:
         return 1
 
     # ------------------------------------------------------------------
-    # Backfill matched_rules (one batch; used by worker and script)
-    # ------------------------------------------------------------------
-
-    def _text_for_backfill(self, row: dict[str, Any]) -> str:
-        """Build title+body text for embedding, same as process_all batch path."""
-        title = strip_hn_prefix((row.get("title") or "").strip())
-        body = (row.get("body") or "").strip()
-        if len(body) > self._max_body_chars:
-            body = body[: self._max_body_chars] + "..."
-        return (f"{title}\n\n{body}".strip()) if title else body
-
-    def run_backfill_rule_match_batch(self, limit: int, *, dry_run: bool = False) -> int:
-        """
-        Process one batch of relevant signals with empty matched_rules: embed, classify, update.
-        Uses same rule-matching and best_rule fallback as auto-accept path. Returns count updated.
-        Called by embed worker each tick (limit from config) and by backfill script in a loop.
-        """
-        batch = self._storage.fetch_relevant_empty_matched_rules_batch(limit, 0)
-        if not batch:
-            return 0
-        n_texts = len(batch)
-        texts = [self._text_for_backfill(row) for row in batch]
-        try:
-            all_vecs = []
-            for i in range(0, len(texts), self._embed_batch_size):
-                chunk = texts[i : i + self._embed_batch_size]
-                vecs = self._embed_texts(chunk)
-                all_vecs.append(vecs)
-                log.info("[embed_processor] backfill: embedded %d/%d", min(i + len(chunk), n_texts), n_texts)
-            vectors = np.vstack(all_vecs) if all_vecs else np.array([], dtype=np.float32).reshape(0, 0)
-        except Exception as e:
-            log.error("[embed_processor] backfill batch embed failed: %s", e)
-            return 0
-        results = self._classify_vectors(vectors)
-        updated = 0
-        for row, res in zip(batch, results):
-            matched_rule_names = list(res.get("matched_rules") or [])
-            if not matched_rule_names and res.get("best_rule"):
-                matched_rule_names = [res["best_rule"]]
-            confidence = res.get("confidence", 0.0)
-            intensity = res.get("intensity", 1)
-            matched_rules = [
-                MatchedRule(rule_name=name, confidence=confidence, evidence="")
-                for name in matched_rule_names
-            ]
-            if not dry_run:
-                try:
-                    self._storage.update_processed_signal_rule_match(
-                        row["dedup_key"], matched_rules, confidence, intensity
-                    )
-                except Exception as e:
-                    log.error("[embed_processor] backfill update failed %s: %s", row["dedup_key"], e)
-                    continue
-            updated += 1
-        return updated
-
-    # ------------------------------------------------------------------
     # Private: build ProcessedSignal
     # ------------------------------------------------------------------
 
