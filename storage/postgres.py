@@ -259,7 +259,7 @@ class PostgresStorage:
                     """
                     SELECT id, dedup_key, title, body, extra
                     FROM raw_signals
-                    WHERE (extra->'keywords') && %s::jsonb
+                    WHERE (extra->'keywords') && CAST(%s AS jsonb)
                     ORDER BY collected_at DESC
                     LIMIT %s
                     """,
