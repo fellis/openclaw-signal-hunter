@@ -32,7 +32,9 @@
     "summary_batch_size": 5,
     "batch_size": 50,
     "max_tokens_per_batch": 20000,
-    "max_body_chars": 1000
+    "max_body_chars": 1000,
+    "llm_relevant_rule_match_per_tick": 50,
+    "backfill_rule_match_per_tick": 64
   },
 
   "hybrid_relevance": {

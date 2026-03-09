@@ -84,6 +84,15 @@ class EmbedWorker:
         if rule_matched:
             log.info("[embed_worker] LLM-relevant rule match: %d signals", rule_matched)
 
+        # Third pass: backfill matched_rules for any relevant signals with empty matched_rules
+        # (e.g. old auto-accept rows). One batch per tick to avoid timeouts; worker drains over time.
+        backfill_per_tick = int(proc_cfg.get("backfill_rule_match_per_tick", 64))
+        backfill_done = 0
+        if backfill_per_tick > 0:
+            backfill_done = processor.run_backfill_rule_match_batch(backfill_per_tick)
+            if backfill_done:
+                log.info("[embed_worker] backfill matched_rules: %d signals", backfill_done)
+
         remaining = self._storage.count_unprocessed()
         log.info("[embed_worker] done: classified=%d remaining=%d", total, remaining)
         return {
@@ -91,4 +100,5 @@ class EmbedWorker:
             "total": total,
             "remaining": remaining,
             "llm_relevant_rule_matched": rule_matched,
+            "backfill_rule_matched": backfill_done,
         }
