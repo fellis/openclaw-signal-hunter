@@ -44,12 +44,13 @@ export function filtersToSearchParams(f: Filters): URLSearchParams {
   return p
 }
 
-export type Page = 'report' | 'charts' | 'logs'
+export type Page = 'report' | 'charts' | 'logs' | 'help'
 
 export const PAGE_PATHS: Record<Page, string> = {
   report: '/report',
   charts: '/charts',
   logs: '/logs',
+  help: '/help',
 }
 
 export function pageFromPath(pathname: string): Page {
@@ -57,5 +58,6 @@ export function pageFromPath(pathname: string): Page {
   if (pathname.startsWith('/charts')) return 'charts'
   if (pathname.startsWith('/search')) return 'report'
   if (pathname.startsWith('/logs')) return 'logs'
+  if (pathname.startsWith('/help')) return 'help'
   return 'report'
 }

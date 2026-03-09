@@ -68,5 +68,10 @@ def get_logs_spa():
     return _serve_spa()
 
 
+@app.get("/help", include_in_schema=False)
+def get_help_spa():
+    return _serve_spa()
+
+
 if os.path.isdir(_static_dir):
     app.mount("/", StaticFiles(directory=_static_dir, html=True), name="frontend")

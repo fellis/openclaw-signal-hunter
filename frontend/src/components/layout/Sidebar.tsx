@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { BarChart2, Zap, Moon, Sun, ScrollText } from 'lucide-react'
+import { BarChart2, Zap, Moon, Sun, ScrollText, HelpCircle } from 'lucide-react'
 import type { Lang } from '@/App'
 import { PAGE_PATHS, type Page } from '@/lib/urlParams'
 import { cn } from '@/lib/utils'
@@ -16,6 +16,7 @@ const NAV = [
   { id: 'report' as Page, path: PAGE_PATHS.report, icon: Zap, label: 'Signals' },
   { id: 'charts' as Page, path: PAGE_PATHS.charts, icon: BarChart2, label: 'Charts' },
   { id: 'logs' as Page, path: PAGE_PATHS.logs, icon: ScrollText, label: 'Logs' },
+  { id: 'help' as Page, path: PAGE_PATHS.help, icon: HelpCircle, label: 'Help' },
 ]
 
 export default function Sidebar({ page, dark, setDark, lang, setLang }: Props) {

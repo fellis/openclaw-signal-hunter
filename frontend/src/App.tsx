@@ -4,6 +4,7 @@ import Sidebar from '@/components/layout/Sidebar'
 import Report from '@/pages/Report'
 import Charts from '@/pages/Charts'
 import WorkersLogs from '@/pages/WorkersLogs'
+import Help from '@/pages/Help'
 import { pageFromPath, PAGE_PATHS } from '@/lib/urlParams'
 
 function SearchRedirect() {
@@ -65,8 +66,9 @@ export default function App() {
         <Routes>
           <Route path={PAGE_PATHS.report} element={<Report lang={lang} />} />
           <Route path={PAGE_PATHS.charts} element={<Charts />} />
-          <Route path="/search" element={<SearchRedirect />} />
           <Route path={PAGE_PATHS.logs} element={<WorkersLogs />} />
+          <Route path={PAGE_PATHS.help} element={<Help lang={lang} />} />
+          <Route path="/search" element={<SearchRedirect />} />
           <Route path="/" element={<Navigate to={PAGE_PATHS.report} replace />} />
           <Route path="*" element={<Navigate to={PAGE_PATHS.report} replace />} />
         </Routes>
