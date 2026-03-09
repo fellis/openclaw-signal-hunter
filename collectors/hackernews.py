@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from core.constants import MAX_AGE_DAYS
 from core.models import (
     CollectResult,
     CursorState,
@@ -27,7 +28,6 @@ from core.registry import BaseCollector, register
 log = logging.getLogger(__name__)
 
 _ALGOLIA_BASE = "https://hn.algolia.com/api/v1"
-_MAX_AGE_DAYS = 90
 _PAGE_SIZE = 50
 _RATE_LIMIT_PAUSE = 0.5
 
@@ -44,7 +44,7 @@ class HackerNewsCollector(BaseCollector):
     def discover(self, keyword: str) -> DiscoveredResources:
         """Count HN threads mentioning keyword."""
         try:
-            since = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+            since = int((datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).timestamp())
             with httpx.Client(timeout=10) as client:
                 resp = client.get(
                     f"{_ALGOLIA_BASE}/search",
@@ -82,7 +82,7 @@ class HackerNewsCollector(BaseCollector):
         for target in plan.targets:
             cursor = cursors.get(target.target_key)
             since_ts = int(cursor.last_collected_at.timestamp()) if cursor and cursor.last_collected_at else \
-                int((datetime.now(timezone.utc) - timedelta(days=_MAX_AGE_DAYS)).timestamp())
+                int((datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).timestamp())
 
             signals, new_cursor = self._search(target.query, since_ts, plan.max_results_per_target)
             all_signals.extend(signals)

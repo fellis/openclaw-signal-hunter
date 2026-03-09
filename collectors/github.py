@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from core.constants import MAX_AGE_DAYS
 from core.models import (
     CollectResult,
     CursorState,
@@ -33,7 +34,6 @@ _DEFAULT_HEADERS = {
     "Accept": "application/vnd.github.v3+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
-_MAX_AGE_DAYS = 90
 _PAGE_SIZE = 100
 _RATE_LIMIT_PAUSE = 1.0
 
@@ -283,7 +283,7 @@ class GitHubCollector(BaseCollector):
         signals: list[RawSignal] = []
         page = 1
         newest_updated_at: datetime | None = None
-        min_age = datetime.now(timezone.utc) - timedelta(days=_MAX_AGE_DAYS)
+        min_age = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
 
         while len(signals) < limit:
             params["page"] = page

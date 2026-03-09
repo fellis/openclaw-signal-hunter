@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from core.constants import MAX_AGE_DAYS
 from core.models import (
     CollectResult,
     CursorState,
@@ -30,7 +31,6 @@ from core.registry import BaseCollector, register
 log = logging.getLogger(__name__)
 
 _HF_API = "https://huggingface.co/api"
-_MAX_AGE_DAYS = 90
 _RATE_LIMIT_PAUSE = 1.0
 _MODEL_LIMIT = 10
 _DISCUSSION_LIMIT = 100
@@ -280,7 +280,7 @@ class HuggingFaceCollector(BaseCollector):
     ) -> tuple[list[RawSignal], CursorState]:
         """Fetch open discussion threads for a model or space."""
         url = f"{_HF_API}/{repo_type}s/{repo_id}/discussions"
-        min_age = datetime.now(timezone.utc) - timedelta(days=_MAX_AGE_DAYS)
+        min_age = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
         signals: list[RawSignal] = []
         newest: datetime | None = None
         page = 1

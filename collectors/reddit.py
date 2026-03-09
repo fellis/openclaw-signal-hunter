@@ -1,19 +1,17 @@
 """
-Reddit collector stub.
-Collects posts and comments from subreddits using Reddit's JSON API.
-No auth required for public subreddits (rate limit: ~10 req/min).
-For higher limits, use PRAW OAuth (60 req/min).
+Reddit collector (keyword-driven).
+Searches Reddit by keyword via PullPush and/or Arctic Shift; no subreddit list.
+Uses RedditAPIFacade for rate limiting and failover.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
-import httpx
-
+from core.constants import MAX_AGE_DAYS
 from core.models import (
     CollectResult,
     CursorState,
@@ -24,310 +22,219 @@ from core.models import (
     SearchTarget,
     SourceStatus,
 )
+from core.models import SourceType
 from core.registry import BaseCollector, register
+
+from collectors.reddit_backends import (
+    BACKEND_ARCTIC_SHIFT,
+    BACKEND_PULLPUSH,
+    BACKEND_PULLPUSH_FAILOVER,
+    REDDIT_DEFAULTS,
+    RawComment,
+    RawSubmission,
+    RedditAPIFacade,
+    SCOPE_REDDIT_KEYWORD,
+    comment_source_id,
+    default_rate_limit_state_path,
+)
 
 log = logging.getLogger(__name__)
 
-_REDDIT_BASE = "https://www.reddit.com"
-_HEADERS = {"User-Agent": "signal-hunter/0.1 (research tool)"}
-_RATE_LIMIT_PAUSE = 2.0
-_MAX_AGE_DAYS = 90
-_PAGE_SIZE = 100
+# Setup guide fragments by backend (no single hardcoded blob)
+SETUP_GUIDE_BY_BACKEND = {
+    BACKEND_PULLPUSH: [
+        "PullPush (api.pullpush.io): no keys required.",
+        "Rate limits: 14 req/min, 900 req/hr. State stored in rate_limit_state_file.",
+    ],
+    BACKEND_ARCTIC_SHIFT: [
+        "Arctic Shift (arctic-shift.photon-reddit.com): no keys required.",
+        "Rate limits: ~1.5 req/s. State stored in rate_limit_state_file.",
+    ],
+    BACKEND_PULLPUSH_FAILOVER: [
+        "PullPush as primary, Arctic Shift as fallback (on 429/5xx). No keys required.",
+        "Set sources.reddit.backend to 'pullpush' or 'arctic_shift' to use a single API.",
+    ],
+}
 
 
 @register
 class RedditCollector(BaseCollector):
     """
-    Collects Reddit posts via JSON API.
-    Supports subreddit_hot, subreddit_new, subreddit_search scopes.
+    Keyword-driven Reddit collection. Searches all of Reddit by keyword;
+    collects submissions and top-level comments. No subreddit list.
     """
 
     name = "reddit"
 
+    def __init__(self) -> None:
+        from storage.config_manager import ConfigManager
+        cm = ConfigManager()
+        self._config = cm.load()
+        reddit_cfg = self._config.get("sources", {}).get("reddit", {})
+        backend = reddit_cfg.get("backend", REDDIT_DEFAULTS["backend"])
+        state_file = (reddit_cfg.get("rate_limit_state_file") or "").strip()
+        if state_file:
+            state_path = Path(state_file).expanduser()
+        else:
+            config_dir = Path(cm._path).parent if cm._path else None
+            state_path = default_rate_limit_state_path(config_dir)
+        failover_min = reddit_cfg.get("failover_duration_minutes", REDDIT_DEFAULTS["failover_duration_minutes"])
+        retry = reddit_cfg.get("retry_attempts", REDDIT_DEFAULTS["retry_attempts"])
+        self._facade = RedditAPIFacade(
+            backend=backend,
+            state_path=state_path,
+            failover_duration_minutes=failover_min,
+            retry_attempts=retry,
+        )
+
     def discover(self, keyword: str) -> DiscoveredResources:
-        """Check if subreddit r/<keyword> exists and search for mentions."""
-        subreddits = []
-        mentioned_in = []
-
-        # Try direct subreddit
-        try:
-            with httpx.Client(headers=_HEADERS, timeout=10) as client:
-                resp = client.get(f"{_REDDIT_BASE}/r/{keyword}/about.json")
-                if resp.status_code == 200:
-                    data = resp.json().get("data", {})
-                    subreddits.append({
-                        "name": keyword,
-                        "subscribers": data.get("subscribers", 0),
-                        "description": data.get("public_description", ""),
-                    })
-        except Exception as e:
-            log.debug("[reddit] discover subreddit check failed: %s", e)
-
-        # Search for mentions in popular subs
-        try:
-            with httpx.Client(headers=_HEADERS, timeout=10) as client:
-                resp = client.get(
-                    f"{_REDDIT_BASE}/search.json",
-                    params={"q": keyword, "sort": "relevance", "limit": 25, "type": "link"},
-                )
-                if resp.status_code == 200:
-                    items = resp.json().get("data", {}).get("children", [])
-                    seen_subs: dict[str, int] = {}
-                    for item in items:
-                        sub = item.get("data", {}).get("subreddit", "")
-                        seen_subs[sub] = seen_subs.get(sub, 0) + 1
-                    mentioned_in = [{"name": k, "count": v} for k, v in seen_subs.items()]
-        except Exception as e:
-            log.debug("[reddit] discover search failed: %s", e)
-
-        return DiscoveredResources(subreddits=subreddits, extra={"mentioned_in": mentioned_in})
+        """Return a thread-like resource for the keyword (same contract as other collectors)."""
+        status = self._facade.check_ready()
+        return DiscoveredResources(
+            threads=[{"query": keyword, "backend": self._backend_name()}],
+            extra={"ready": status.ready},
+        )
 
     def build_plan(self, profile: KeywordProfile) -> SearchPlan:
-        """Build subreddit targets from discovered resources and LLM-suggested subreddits."""
-        reddit_resources = profile.discovered.get("reddit")
-        discovered_subs = reddit_resources.subreddits if reddit_resources else []
-
-        # Collect subreddit names from all sources (preserve order, deduplicate)
-        seen: set[str] = set()
-        sub_names: list[str] = []
-
-        # 1. Directly discovered subreddits (exact match for keyword name)
-        for sub in discovered_subs:
-            name = sub.get("name", "").lower()
-            if name and name not in seen:
-                seen.add(name)
-                sub_names.append(name)
-
-        # 2. LLM-suggested relevant subreddits
-        for name in profile.relevant_subreddits:
-            clean = name.strip().lstrip("r/").lower()
-            if clean and clean not in seen:
-                seen.add(clean)
-                sub_names.append(clean)
-
-        targets: list[SearchTarget] = []
-
-        for sub_name in sub_names[:8]:
-            # Search within each relevant subreddit
-            targets.append(SearchTarget(
-                query=profile.canonical_name,
-                scope="subreddit_search",
-                params={"sub": sub_name},
-            ))
-            # Also pull latest posts from the subreddit itself if it's a direct match
-            if sub_name in {s.get("name", "").lower() for s in discovered_subs}:
-                targets.append(SearchTarget(
-                    query="",
-                    scope="subreddit_new",
-                    params={"sub": sub_name},
-                ))
-
-        # Always include a global search as a catch-all
-        targets.append(SearchTarget(
+        reddit_cfg = self._config.get("sources", {}).get("reddit", {})
+        max_per = reddit_cfg.get("max_submissions_per_keyword", REDDIT_DEFAULTS["max_submissions_per_keyword"])
+        target = SearchTarget(
             query=profile.canonical_name,
-            scope="global_search",
+            scope=SCOPE_REDDIT_KEYWORD,
             params={},
-        ))
+        )
+        return SearchPlan(targets=[target], max_results_per_target=max_per)
 
-        return SearchPlan(targets=targets, max_results_per_target=200)
+    def collect(self, plan: SearchPlan, cursors: dict[str, CursorState]) -> CollectResult:
+        reddit_cfg = self._config.get("sources", {}).get("reddit", {})
+        skip_authors = set(reddit_cfg.get("skip_authors") or ["[deleted]", "AutoModerator", "RemindMeBot"])
+        min_score_comments = reddit_cfg.get("min_score_for_comments", REDDIT_DEFAULTS["min_score_for_comments"])
+        max_comment_fetches = reddit_cfg.get("max_comment_fetches_per_run", REDDIT_DEFAULTS["max_comment_fetches_per_run"])
+        submission_min_score = reddit_cfg.get("submission_min_score", REDDIT_DEFAULTS["submission_min_score"])
 
-    def collect(
-        self, plan: SearchPlan, cursors: dict[str, CursorState]
-    ) -> CollectResult:
         all_signals: list[RawSignal] = []
         updated_cursors: dict[str, CursorState] = {}
+        comment_fetches = 0
+        now = datetime.now(timezone.utc)
 
         for target in plan.targets:
+            if target.scope != SCOPE_REDDIT_KEYWORD:
+                continue
             cursor = cursors.get(target.target_key)
-            since = cursor.last_collected_at if cursor else None
+            after_utc: int | None = None
+            if cursor and cursor.last_collected_at:
+                after_utc = int(cursor.last_collected_at.timestamp())
+            elif cursor and cursor.last_cursor:
+                try:
+                    after_utc = int(cursor.last_cursor)
+                except ValueError:
+                    pass
+            if after_utc is None:
+                after_utc = int((now - timedelta(days=MAX_AGE_DAYS)).timestamp())
 
+            keyword = target.query
+            max_results = plan.max_results_per_target
             try:
-                if target.scope in ("subreddit_hot", "subreddit_new"):
-                    signals, new_cursor = self._collect_subreddit(
-                        target.params.get("sub", ""), target.scope, since, plan.max_results_per_target
-                    )
-                elif target.scope == "subreddit_search":
-                    signals, new_cursor = self._search_subreddit(
-                        target.params.get("sub", ""), target.query, since, plan.max_results_per_target
-                    )
-                elif target.scope == "global_search":
-                    signals, new_cursor = self._global_search(
-                        target.query, since, plan.max_results_per_target
-                    )
-                else:
-                    log.warning("[reddit] unknown scope: %s", target.scope)
-                    continue
-
-                all_signals.extend(signals)
-                updated_cursors[target.target_key] = new_cursor
-                time.sleep(_RATE_LIMIT_PAUSE)
+                submissions = self._facade.search_submissions(keyword, after_utc, max_results)
             except Exception as e:
-                log.warning("[reddit] collect failed for %s: %s", target.scope, e)
+                log.warning("[reddit] collect failed for keyword %s: %s", keyword, e)
+                continue
+
+            max_created_utc: int | None = after_utc
+            for sub in submissions:
+                if sub.author in skip_authors:
+                    continue
+                if sub.score < submission_min_score:
+                    continue
+                if sub.created_utc:
+                    if max_created_utc is None or sub.created_utc > max_created_utc:
+                        max_created_utc = sub.created_utc
+                sig = self._submission_to_signal(sub)
+                if sig:
+                    all_signals.append(sig)
+
+                if comment_fetches >= max_comment_fetches:
+                    continue
+                if sub.num_comments <= 0 or sub.score < min_score_comments:
+                    continue
+                try:
+                    comments = self._facade.search_comments(sub.id, limit=50)
+                    comment_fetches += 1
+                except Exception as e:
+                    log.debug("[reddit] comments fetch failed for %s: %s", sub.id, e)
+                    continue
+                for c in comments:
+                    if c.author in skip_authors:
+                        continue
+                    if not (c.parent_id or "").startswith("t3_"):
+                        continue
+                    csig = self._comment_to_signal(c, sub)
+                    if csig:
+                        all_signals.append(csig)
+
+            new_cursor_ts = max_created_utc if max_created_utc is not None else (int(now.timestamp()) if submissions else (after_utc or int(now.timestamp())))
+            new_dt = datetime.fromtimestamp(new_cursor_ts, tz=timezone.utc)
+            updated_cursors[target.target_key] = CursorState(
+                target_key=target.target_key,
+                last_collected_at=new_dt,
+                last_cursor=str(new_cursor_ts),
+            )
 
         return CollectResult(signals=all_signals, updated_cursors=updated_cursors)
 
     def check_readiness(self) -> SourceStatus:
-        try:
-            with httpx.Client(headers=_HEADERS, timeout=10) as client:
-                resp = client.get(f"{_REDDIT_BASE}/r/LocalLLaMA/about.json")
-                if resp.status_code == 200:
-                    return SourceStatus(
-                        source="reddit",
-                        ready=True,
-                        limit_info="~10 req/min (public JSON API, no auth needed)",
-                    )
-                return SourceStatus(
-                    source="reddit",
-                    ready=False,
-                    note=f"API returned {resp.status_code}",
-                )
-        except Exception as e:
-            return SourceStatus(source="reddit", ready=False, note=str(e))
+        return self._facade.check_ready()
 
     def get_setup_guide(self) -> list[str]:
-        return [
-            "Reddit public JSON API requires no authentication for read-only access.",
-            "Rate limit: ~10 req/min with User-Agent header (enforced).",
-            "For higher limits (60 req/min), register a Reddit app:",
-            "  1. Go to https://www.reddit.com/prefs/apps",
-            "  2. Scroll down, click 'create another app'",
-            "  3. Name: signal-hunter, type: script, redirect: http://localhost",
-            "  4. Note client_id (under app name) and client_secret",
-            "  5. Set: REDDIT_CLIENT_ID=<id> REDDIT_CLIENT_SECRET=<secret> in .env",
-            "(Optional PRAW integration not yet implemented - current limit sufficient for most use cases)",
-        ]
+        name = self._backend_name()
+        return SETUP_GUIDE_BY_BACKEND.get(name, SETUP_GUIDE_BY_BACKEND[BACKEND_PULLPUSH_FAILOVER])
 
-    # ------------------------------------------------------------------
-    # Private
-    # ------------------------------------------------------------------
-
-    def _collect_subreddit(
-        self, sub: str, scope: str, since: datetime | None, limit: int
-    ) -> tuple[list[RawSignal], CursorState]:
-        sort = "new" if scope == "subreddit_new" else "hot"
-        url = f"{_REDDIT_BASE}/r/{sub}/{sort}.json"
-        min_age = datetime.now(timezone.utc) - timedelta(days=_MAX_AGE_DAYS)
-        signals: list[RawSignal] = []
-        after = None
-        newest: datetime | None = None
-
-        while len(signals) < limit:
-            params = {"limit": min(100, limit - len(signals))}
-            if after:
-                params["after"] = after
-
-            try:
-                with httpx.Client(headers=_HEADERS, timeout=15) as client:
-                    resp = client.get(url, params=params)
-                    resp.raise_for_status()
-                    data = resp.json().get("data", {})
-            except Exception as e:
-                log.warning("[reddit] subreddit %s/%s failed: %s", sub, sort, e)
-                break
-
-            items = data.get("children", [])
-            if not items:
-                break
-
-            for item in items:
-                post = item.get("data", {})
-                created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
-                if created < min_age:
-                    return signals, self._make_cursor(sub, newest)
-                if since and created <= since:
-                    return signals, self._make_cursor(sub, newest)
-                if newest is None:
-                    newest = created
-
-                signal = self._post_to_signal(post, sub)
-                if signal:
-                    signals.append(signal)
-
-            after = data.get("after")
-            if not after:
-                break
-            time.sleep(_RATE_LIMIT_PAUSE)
-
-        return signals, self._make_cursor(sub, newest)
-
-    def _search_subreddit(
-        self, sub: str, query: str, since: datetime | None, limit: int
-    ) -> tuple[list[RawSignal], CursorState]:
-        url = f"{_REDDIT_BASE}/r/{sub}/search.json"
-        params = {"q": query, "restrict_sr": "on", "sort": "new", "limit": min(100, limit)}
-        signals: list[RawSignal] = []
-        newest: datetime | None = None
-
-        try:
-            with httpx.Client(headers=_HEADERS, timeout=15) as client:
-                resp = client.get(url, params=params)
-                resp.raise_for_status()
-                items = resp.json().get("data", {}).get("children", [])
-                for item in items:
-                    post = item.get("data", {})
-                    created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
-                    if newest is None:
-                        newest = created
-                    signal = self._post_to_signal(post, sub)
-                    if signal:
-                        signals.append(signal)
-        except Exception as e:
-            log.warning("[reddit] subreddit search failed %s: %s", sub, e)
-
-        return signals, self._make_cursor(f"{sub}:{query}", newest)
-
-    def _global_search(
-        self, query: str, since: datetime | None, limit: int
-    ) -> tuple[list[RawSignal], CursorState]:
-        url = f"{_REDDIT_BASE}/search.json"
-        params = {"q": query, "sort": "new", "type": "link", "limit": min(100, limit)}
-        signals: list[RawSignal] = []
-        newest: datetime | None = None
-
-        try:
-            with httpx.Client(headers=_HEADERS, timeout=15) as client:
-                resp = client.get(url, params=params)
-                resp.raise_for_status()
-                items = resp.json().get("data", {}).get("children", [])
-                for item in items:
-                    post = item.get("data", {})
-                    created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
-                    if newest is None:
-                        newest = created
-                    signal = self._post_to_signal(post, None)
-                    if signal:
-                        signals.append(signal)
-        except Exception as e:
-            log.warning("[reddit] global search failed for '%s': %s", query, e)
-
-        return signals, self._make_cursor(query, newest)
+    def _backend_name(self) -> str:
+        reddit_cfg = self._config.get("sources", {}).get("reddit", {})
+        return reddit_cfg.get("backend", REDDIT_DEFAULTS["backend"])
 
     @staticmethod
-    def _post_to_signal(post: dict[str, Any], sub: str | None) -> RawSignal | None:
-        try:
-            post_id = post.get("id", "")
-            subreddit = post.get("subreddit", sub or "")
-            created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
-            return RawSignal(
-                source="reddit_post",
-                source_id=post_id,
-                url=f"https://reddit.com{post.get('permalink', '')}",
-                title=post.get("title", ""),
-                body=post.get("selftext") or post.get("url", ""),
-                author=post.get("author", ""),
-                created_at=created,
-                collected_at=datetime.now(timezone.utc),
-                score=post.get("score", 0),
-                comments_count=post.get("num_comments", 0),
-                tags=[post.get("link_flair_text")] if post.get("link_flair_text") else [],
-                extra={"subreddit": subreddit},
-            )
-        except Exception:
+    def _submission_to_signal(sub: RawSubmission) -> RawSignal | None:
+        if not sub.id:
             return None
+        created = datetime.fromtimestamp(sub.created_utc, tz=timezone.utc) if sub.created_utc else datetime.now(timezone.utc)
+        url = sub.url or f"https://reddit.com/comments/{sub.id}"
+        if not url.startswith("http"):
+            url = f"https://reddit.com{url}"
+        body = sub.selftext or sub.title
+        return RawSignal(
+            source=SourceType.REDDIT_POST.value,
+            source_id=sub.id,
+            url=url,
+            title=sub.title or "",
+            body=body or "",
+            author=sub.author or "",
+            created_at=created,
+            collected_at=datetime.now(timezone.utc),
+            score=sub.score,
+            comments_count=sub.num_comments,
+            extra={"subreddit": sub.subreddit, "link_url": sub.link_url},
+        )
 
     @staticmethod
-    def _make_cursor(key: str, newest: datetime | None) -> CursorState:
-        return CursorState(
-            target_key=key,
-            last_collected_at=newest or datetime.now(timezone.utc),
+    def _comment_to_signal(c: RawComment, sub: RawSubmission) -> RawSignal | None:
+        if not c.id:
+            return None
+        created = datetime.fromtimestamp(c.created_utc, tz=timezone.utc) if c.created_utc else datetime.now(timezone.utc)
+        base_url = sub.url or f"https://reddit.com/comments/{sub.id}"
+        if not base_url.startswith("http"):
+            base_url = f"https://reddit.com{base_url}"
+        url = f"{base_url.rstrip('/')}/{c.id}"
+        return RawSignal(
+            source=SourceType.REDDIT_COMMENT.value,
+            source_id=comment_source_id(c.id),
+            url=url,
+            title="",
+            body=c.body or "",
+            author=c.author or "",
+            created_at=created,
+            collected_at=datetime.now(timezone.utc),
+            score=c.score,
+            comments_count=0,
+            extra={"subreddit": c.subreddit, "submission_id": c.submission_id},
         )

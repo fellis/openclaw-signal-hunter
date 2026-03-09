@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from core.constants import MAX_AGE_DAYS
 from core.models import (
     CollectResult,
     CursorState,
@@ -29,7 +30,6 @@ from core.registry import BaseCollector, register
 log = logging.getLogger(__name__)
 
 _SO_API = "https://api.stackexchange.com/2.3"
-_MAX_AGE_DAYS = 90
 _PAGE_SIZE = 100
 _RATE_LIMIT_PAUSE = 1.5
 
@@ -97,7 +97,7 @@ class StackOverflowCollector(BaseCollector):
         for target in plan.targets:
             cursor = cursors.get(target.target_key)
             since_ts = int(cursor.last_collected_at.timestamp()) if cursor and cursor.last_collected_at else \
-                int((datetime.now(timezone.utc) - timedelta(days=_MAX_AGE_DAYS)).timestamp())
+                int((datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).timestamp())
 
             if target.scope == "tag":
                 signals, new_cursor = self._collect_by_tag(
