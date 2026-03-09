@@ -175,6 +175,10 @@ class TranslateWorker:
         for start in range(0, len(non_empty), max_per_request):
             chunk = non_empty[start : start + max_per_request]
             indices, payloads = zip(*chunk)
+            log.info(
+                "[translate_worker] POST %s/translate timeout=%.0fs texts=%d",
+                TRANSLATOR_URL, TRANSLATOR_TIMEOUT_SEC, len(payloads),
+            )
             resp = httpx.post(
                 f"{TRANSLATOR_URL}/translate",
                 json={"texts": list(payloads), "target_lang": TARGET_LANG},
