@@ -476,9 +476,16 @@ class EmbedProcessor:
         batch = self._storage.fetch_relevant_empty_matched_rules_batch(limit, 0)
         if not batch:
             return 0
+        n_texts = len(batch)
         texts = [self._text_for_backfill(row) for row in batch]
         try:
-            vectors = self._embed_texts(texts)
+            all_vecs = []
+            for i in range(0, len(texts), self._embed_batch_size):
+                chunk = texts[i : i + self._embed_batch_size]
+                vecs = self._embed_texts(chunk)
+                all_vecs.append(vecs)
+                log.info("[embed_processor] backfill: embedded %d/%d", min(i + len(chunk), n_texts), n_texts)
+            vectors = np.vstack(all_vecs) if all_vecs else np.array([], dtype=np.float32).reshape(0, 0)
         except Exception as e:
             log.error("[embed_processor] backfill batch embed failed: %s", e)
             return 0

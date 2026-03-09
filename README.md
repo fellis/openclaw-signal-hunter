@@ -523,14 +523,12 @@ If a task is stuck in `running` for more than 1 minute (e.g. previous tick died 
 
 After the LLM task queue is drained each tick, `TranslateWorker.run()` is called automatically - one batch of 32 embedded signals (with summary, not yet translated to `TARGET_LANG`) is sent to the MADLAD-400 service. Results are stored in `signal_translations`.
 
-Embed Worker per tick (no LLM, runs independently):
-- Fetches raw signals with no `processed_signals` row (up to `batch_size * max_batches_per_run`)
-- Strips HN noise prefixes ("Show HN:", "Ask HN:", etc.) from titles before embedding
-- Embeds via local bge-m3 HTTP service
-- Builds rule vectors once at init: description + examples = positive anchors; negative_examples = negative anchors
-- Classifies by adjusted cosine similarity: `pos_sim - neg_weight * max(0, neg_sim - neg_min_sim)` per rule
-- Applies per-rule thresholds (`rule_thresholds` in config) for finer precision control
-- Saves with `summary=null` - summary is generated asynchronously by LLM Worker
+Embed Worker per tick (no LLM, runs independently). Each tick runs up to three passes:
+1. **Classify new raw signals** (when there are unprocessed rows): fetches raw signals with no `processed_signals` row (up to `batch_size * max_batches_per_run`), strips HN noise from titles, embeds via bge-m3, domain pre-filter + rule matching, saves with `summary=null` (summary by LLM Worker later).
+2. **LLM-relevant rule match** (up to `llm_relevant_rule_match_per_tick` per tick): signals that were marked relevant by the LLM (borderline flow) but have empty `matched_rules` get categories assigned via the same embed + rule-matching logic so the report can show them by category.
+3. **Backfill matched_rules** (up to `backfill_rule_match_per_tick` per tick): any other relevant signals with empty `matched_rules` (e.g. old auto-accept before we added rule match there) get categories in batches; one batch per tick so the worker does not timeout. When the queue is empty, this pass does nothing. See `docs/backfill-matched-rules-cleanup.md` for removing backfill code after the queue is drained.
+
+Rule vectors (description + examples = positive anchors, negative_examples = negative anchors) are built once at processor init. Classification uses adjusted cosine similarity and per-rule thresholds (`rule_thresholds` in config).
 
 Collect Worker per tick:
 - Picks the single stalest keyword not collected in 24h
@@ -708,6 +706,8 @@ Key sections:
 - `summary_batch_size: 5` - relevant signals per LLM call in summarize_batch worker.
 - `batch_size: 50` - raw signals fetched per Embed Worker batch.
 - `max_batches_per_run: 5` - max batches the Embed Worker processes per run (50 × 5 = 250 signals/min max).
+- `llm_relevant_rule_match_per_tick: 50` - signals marked relevant by LLM (borderline) that have no category get rule-match per tick.
+- `backfill_rule_match_per_tick: 256` - relevant signals with empty `matched_rules` (e.g. legacy auto-accept) get categories per tick; set to `0` to disable. One-off full run: `python scripts/backfill_matched_rules.py` (optional).
 
 **`hybrid_relevance`** (domain pre-filter + LLM for borderline):
 - `enabled: true` - use domain score (positive/negative anchors) before rule matching; signals between `domain_low` and `domain_high` go to LLM (borderline_relevance task).
