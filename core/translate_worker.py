@@ -178,7 +178,7 @@ class TranslateWorker:
                 f"{TRANSLATOR_URL}/translate",
                 json={"texts": list(payloads), "target_lang": TARGET_LANG},
                 headers=headers,
-                timeout=120.0,
+                timeout=300.0,
             )
             resp.raise_for_status()
             data = resp.json()

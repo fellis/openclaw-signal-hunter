@@ -37,5 +37,5 @@ pgdata/
 .cache/
 
 # Runtime config - contains live keywords, rules, credentials. Never overwrite with git pull.
-# Use config.example.json as reference template.
+# Use config.example.json as reference; copy to config.json on VPS (Reddit is disabled by default; enable in config if needed).
 config.json

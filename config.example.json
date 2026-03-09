@@ -5,7 +5,19 @@
 
   "sources": {
     "github":        {"enabled": true,  "credentials": {"api_token": "${GITHUB_TOKEN}"}},
-    "reddit":        {"enabled": false, "credentials": {}},
+    "reddit": {
+      "enabled": false,
+      "backend": "pullpush_failover",
+      "max_submissions_per_keyword": 100,
+      "min_score_for_comments": 3,
+      "max_comment_fetches_per_run": 300,
+      "submission_min_score": 1,
+      "comment_min_score": 1,
+      "skip_authors": ["[deleted]", "AutoModerator", "RemindMeBot"],
+      "failover_duration_minutes": 10,
+      "retry_attempts": 3,
+      "rate_limit_state_file": "/app/reddit_rate_limit.json"
+    },
     "hackernews":    {"enabled": true,  "credentials": {}},
     "stackoverflow": {"enabled": true,  "credentials": {}},
     "producthunt":   {"enabled": false, "credentials": {}},
