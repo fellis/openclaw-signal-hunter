@@ -31,6 +31,7 @@ Everything runs on a VPS, fully offline (except for API calls to data sources an
 | **Qdrant** | Vector search (cosine, 1024 dims) |
 | **BAAI/bge-m3** | Cross-lingual embeddings via `sentence-transformers` |
 | **Embedder service** | Two FastAPI containers - `embedder:6335` for classify/query, `embedder-vectorizer:6336` for Qdrant upserts; model loaded once, both share `hf_cache` volume |
+| **json-repair** | Robust parsing of LLM JSON (summarize_batch, borderline_relevance) |
 | **Local LLM** | Summary generation, rule suggestions, keyword enrichment (OpenAI-compatible endpoint) |
 | **Claude (Anthropic)** | Queries, resolution strategy (configurable) |
 | **MADLAD-400-3B** | Multilingual machine translation (CTranslate2, INT8). Translates signal titles and summaries to Russian. Runs as a separate FastAPI service, accessed via `llm-api` proxy |
@@ -61,6 +62,7 @@ skill/main.py         ← CLI dispatcher
      ├── core/embedder.py        ← HTTP client → embedder service → Qdrant (Outbox pattern)
      ├── core/llm_router.py      ← routes ops to local/Claude by config
      ├── core/llm_worker.py      ← LLM task queue: resolve + borderline_relevance + summarize_batch
+     │                              JSON from LLM (summarize, borderline) parsed with json-repair
      ├── core/translate_worker.py ← translation worker: one batch per LLM Worker tick
      │                              translates title+summary → signal_translations table
      │
@@ -241,7 +243,7 @@ Reload OpenClaw. The plugin registers 25 tools and the `/sh` slash command.
 
 ### 7. Deploy to production (optional)
 
-For VPS deployment (OVH or similar): see `docs/deploy-vps.md`. Typical flow: `git pull`, `docker compose build web-report` (when frontend or backend changed), `docker compose up -d web-report` (and optionally `signal-hunter-workers`). No search result cache; report/clusters run search on each request when `q` is set.
+For VPS deployment (OVH or similar): see `docs/deploy-vps.md`. Typical flow: `git pull`, then `docker compose up -d --build <service>`. For frontend/backend only: `docker compose build web-report && docker compose up -d web-report`. For workers (code or deps change): `docker compose up -d --build signal-hunter-workers`. Building `signal-hunter-workers` is heavy (torch, sentence-transformers; 10–15 min). If build fails with **no space left on device**, free space: `docker compose stop signal-hunter-workers`, remove the workers image, then `docker system prune -af` and `docker builder prune -af` (do **not** use `--volumes` so PostgreSQL and Qdrant data are preserved), then rerun the build. No search result cache; report/clusters run search on each request when `q` is set.
 
 ---
 
