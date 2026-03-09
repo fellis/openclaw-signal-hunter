@@ -45,11 +45,6 @@ class EmbedWorker:
         from core.orchestrator import load_rules
 
         unprocessed = self._storage.count_unprocessed()
-        if unprocessed == 0:
-            log.info("[embed_worker] no unprocessed signals, idle")
-            return {"status": "idle", "note": "No unprocessed signals."}
-
-        max_batches = self._config.get("processor", {}).get("max_batches_per_run", 5)
 
         rules = load_rules(self._config)
         if not rules:
@@ -57,15 +52,19 @@ class EmbedWorker:
             return {"status": "skipped", "note": "No extraction_rules defined."}
 
         processor = EmbedProcessor(self._storage, rules, self._config)
-        total = processor.process_all(max_batches=max_batches)
-
-        if total == -1:
-            log.warning("[embed_worker] another instance already running, skipping")
-            return {
-                "status": "skipped",
-                "note": "Another processing run is already active.",
-                "remaining": unprocessed,
-            }
+        total = 0
+        if unprocessed > 0:
+            max_batches = self._config.get("processor", {}).get("max_batches_per_run", 5)
+            total = processor.process_all(max_batches=max_batches)
+            if total == -1:
+                log.warning("[embed_worker] another instance already running, skipping")
+                return {
+                    "status": "skipped",
+                    "note": "Another processing run is already active.",
+                    "remaining": unprocessed,
+                }
+        else:
+            log.info("[embed_worker] no unprocessed signals; running LLM rule-match and backfill passes only")
 
         # Second pass: rule-match for LLM-relevant signals that have empty matched_rules
         proc_cfg = self._config.get("processor", {})
