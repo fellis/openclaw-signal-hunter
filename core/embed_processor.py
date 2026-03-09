@@ -248,14 +248,29 @@ class EmbedProcessor:
             score = float(domain_scores[i])
 
             if score >= self._domain_high:
-                # Auto-accept: domain score alone is sufficient evidence of AI/ML relevance.
-                # Rule matching is intentionally skipped here - this matches the validated
-                # test logic (test_hybrid_500.py, F1 92.1%). Running rule matching in this
-                # zone incorrectly rejects ~44% of AI/ML signals that lack a matching rule.
+                # Auto-accept: domain score alone is sufficient for relevance (do not use
+                # rule matching to reject - that would drop ~44% of valid AI/ML signals).
+                # Still run rule matching to assign a category (matched_rules) for the report.
+                rule_classifications = self._classify_vectors(signal_vectors[i : i + 1])
+                rule_cls = rule_classifications[0] if rule_classifications else {}
+                matched_rule_names = list(rule_cls.get("matched_rules") or [])
+                if not matched_rule_names and self._rules:
+                    # No rule above threshold: use best-matching rule for category only
+                    rule_sims = []
+                    for pos_vecs, neg_vecs in zip(self._rule_vectors, self._rule_neg_vectors):
+                        pos_sim = float((pos_vecs @ signal_vectors[i]).max())
+                        if neg_vecs is not None and self._neg_weight > 0.0:
+                            neg_sim = float((neg_vecs @ signal_vectors[i]).max())
+                            penalty = max(0.0, neg_sim - self._neg_min_sim)
+                            pos_sim = pos_sim - self._neg_weight * penalty
+                        rule_sims.append(pos_sim)
+                    if rule_sims:
+                        best_j = int(np.argmax(rule_sims))
+                        matched_rule_names = [self._rules[best_j].name]
                 ps = self._build_processed_signal(
                     {
                         "is_relevant": True,
-                        "matched_rules": [],
+                        "matched_rules": matched_rule_names,
                         "confidence": round(score, 4),
                         "intensity": self._sim_to_intensity(score),
                         "summary": None,
@@ -413,11 +428,14 @@ class EmbedProcessor:
                 if sim >= self._per_rule_thresholds.get(self._rules[j].name, self._rule_threshold)
             ]
 
+            best_rule = self._rules[int(np.argmax(rule_sims))].name if rule_sims else None
+
             is_relevant = max_sim >= self._relevance_threshold and len(matched_rule_names) > 0
 
             results.append({
                 "is_relevant": is_relevant,
                 "matched_rules": matched_rule_names,
+                "best_rule": best_rule,
                 "confidence": round(max_sim, 4),
                 "intensity": self._sim_to_intensity(max_sim),
                 "summary": None,

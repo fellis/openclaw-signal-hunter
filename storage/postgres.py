@@ -303,6 +303,40 @@ class PostgresStorage:
                 )
                 return [row["dedup_key"] for row in cur.fetchall()]
 
+    def count_relevant_empty_matched_rules(self) -> int:
+        """Count processed_signals that are relevant but have empty matched_rules (for backfill)."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM processed_signals
+                    WHERE is_relevant = true
+                      AND (matched_rules IS NULL OR matched_rules = '[]'::jsonb OR jsonb_array_length(matched_rules) = 0)
+                    """
+                )
+                row = cur.fetchone()
+                return int(row["n"]) if row else 0
+
+    def fetch_relevant_empty_matched_rules_batch(
+        self, limit: int, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Fetch batch of relevant processed_signals with empty matched_rules, with raw title/body (for backfill)."""
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT p.dedup_key, p.raw_signal_id, r.title, r.body
+                    FROM processed_signals p
+                    JOIN raw_signals r ON r.id = p.raw_signal_id
+                    WHERE p.is_relevant = true
+                      AND (p.matched_rules IS NULL OR p.matched_rules = '[]'::jsonb OR jsonb_array_length(p.matched_rules) = 0)
+                    ORDER BY p.processed_at ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (limit, offset),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
     def update_processed_signal_rule_match(
         self,
         dedup_key: str,
