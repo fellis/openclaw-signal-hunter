@@ -25,6 +25,8 @@ import logging
 import time
 from typing import Any
 
+from core.embed_processor import EmbedProcessor
+from core.models import ProcessedSignal
 from storage.postgres import PostgresStorage
 
 log = logging.getLogger(__name__)
@@ -106,7 +108,6 @@ class LLMWorker:
     def __init__(self, config: dict[str, Any], storage: PostgresStorage) -> None:
         self._config = config
         self._storage = storage
-        self._embed_processor = None  # lazy init - only when borderline tasks exist
         self._router = None  # reuse one router (and its HTTP connections) to avoid per-tick DNS resolution
 
     def run_loop(self, budget_seconds: int = _DEFAULT_BUDGET_SECONDS) -> dict[str, Any]:
@@ -228,6 +229,38 @@ class LLMWorker:
     # Task handlers
     # ------------------------------------------------------------------
 
+    def _build_llm_relevant_processed_signal(self, raw: dict[str, Any]) -> ProcessedSignal:
+        """Build minimal ProcessedSignal for LLM-relevant borderline; embed worker fills matched_rules later."""
+        raw_extra = raw.get("extra") or {}
+        if isinstance(raw_extra, str):
+            try:
+                raw_extra = json.loads(raw_extra)
+            except (ValueError, TypeError):
+                raw_extra = {}
+        keywords_matched = raw_extra.get("keywords") or []
+        rank_score = EmbedProcessor._compute_rank_score(
+            intensity=1,
+            confidence=1.0,
+            score=raw.get("score", 0) or 0,
+            created_at=raw.get("created_at"),
+            comments_count=raw.get("comments_count", 0) or 0,
+        )
+        return ProcessedSignal(
+            raw_signal_id=str(raw["id"]),
+            dedup_key=raw["dedup_key"],
+            is_relevant=True,
+            matched_rules=[],
+            summary=None,
+            products_mentioned=[],
+            intensity=1,
+            confidence=1.0,
+            keywords_matched=keywords_matched,
+            language="en",
+            rank_score=rank_score,
+            borderline_override_pending=False,
+            classification_source="llm",
+        )
+
     def _handle_resolve(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Resolve and auto-approve a keyword from the queue."""
         from core.registry import load_all_collectors
@@ -261,8 +294,7 @@ class LLMWorker:
     def _handle_borderline_relevance(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Classify a borderline signal using LLM (v6 prompt).
-        If relevant: run rule matching via EmbedProcessor.classify_single,
-        update processed_signal, enqueue summarize.
+        If relevant: upsert minimal ProcessedSignal (matched_rules=[]); embed worker fills rules later.
         If not relevant: clear borderline_override_pending flag.
         """
         from core.llm_router import LLMCall, LLMRouter
@@ -318,14 +350,10 @@ class LLMWorker:
             is_relevant = False
 
         if is_relevant:
-            ep = self._get_embed_processor()
-            ps = ep.classify_single(raw)
-            ps.is_relevant = True
-            ps.borderline_override_pending = False
-            ps.classification_source = "llm"
+            ps = self._build_llm_relevant_processed_signal(raw)
             self._storage.upsert_processed_signal(ps)
             log.info("[llm_worker] borderline RELEVANT: %s", dedup_key)
-            return {"dedup_key": dedup_key, "relevant": True, "matched_rules": [r.rule_name for r in ps.matched_rules]}
+            return {"dedup_key": dedup_key, "relevant": True, "matched_rules": []}
         else:
             self._storage.clear_borderline_pending(dedup_key)
             log.info("[llm_worker] borderline NOT relevant: %s", dedup_key)
@@ -417,14 +445,10 @@ class LLMWorker:
             dedup_key = r["dedup_key"]
             raw = r["raw"]
             if is_relevant:
-                ep = self._get_embed_processor()
-                ps = ep.classify_single(raw)
-                ps.is_relevant = True
-                ps.borderline_override_pending = False
-                ps.classification_source = "llm"
+                ps = self._build_llm_relevant_processed_signal(raw)
                 self._storage.upsert_processed_signal(ps)
                 log.info("[llm_worker] borderline RELEVANT: %s", dedup_key)
-                results_by_index.append({"dedup_key": dedup_key, "relevant": True, "matched_rules": [x.rule_name for x in ps.matched_rules]})
+                results_by_index.append({"dedup_key": dedup_key, "relevant": True, "matched_rules": []})
             else:
                 self._storage.clear_borderline_pending(dedup_key)
                 log.info("[llm_worker] borderline NOT relevant: %s", dedup_key)
@@ -504,15 +528,6 @@ class LLMWorker:
         remaining = self._storage.count_unsummarized()
         log.info("[llm_worker] summarized=%d remaining=%d", summarized, remaining)
         return {"summarized": summarized, "remaining": remaining}
-
-    def _get_embed_processor(self):
-        """Lazy-init EmbedProcessor for classify_single calls (borderline-relevant path)."""
-        if self._embed_processor is None:
-            from core.embed_processor import EmbedProcessor
-            from core.orchestrator import load_rules
-            rules = load_rules(self._config)
-            self._embed_processor = EmbedProcessor(self._storage, rules, self._config)
-        return self._embed_processor
 
     def _make_router(self):
         """Reuse one router per worker instance so HTTP connections (and DNS resolution) are reused."""

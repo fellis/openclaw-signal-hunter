@@ -284,6 +284,50 @@ class PostgresStorage:
                 )
                 # embedding_queue is populated by update_summary once summary is ready
 
+    def fetch_llm_relevant_pending_rule_match(self, limit: int = 50) -> list[str]:
+        """
+        Return dedup_keys of processed_signals that are LLM-relevant but have no
+        matched_rules yet (rule matching is done by embed worker).
+        """
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    SELECT dedup_key FROM processed_signals
+                    WHERE classification_source = 'llm'
+                      AND (matched_rules = '[]'::jsonb OR jsonb_array_length(matched_rules) = 0)
+                    ORDER BY processed_at ASC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                return [row["dedup_key"] for row in cur.fetchall()]
+
+    def update_processed_signal_rule_match(
+        self,
+        dedup_key: str,
+        matched_rules: list,
+        confidence: float,
+        intensity: int,
+    ) -> None:
+        """Update only matched_rules, confidence, intensity for a processed signal (after embed rule match)."""
+        matched_rules_json = json.dumps(
+            [
+                {"rule_name": r.rule_name, "confidence": r.confidence, "evidence": r.evidence}
+                for r in matched_rules
+            ]
+        )
+        with self._conn() as conn:
+            with self._cursor(conn) as cur:
+                cur.execute(
+                    """
+                    UPDATE processed_signals
+                    SET matched_rules = %s::jsonb, confidence = %s, intensity = %s
+                    WHERE dedup_key = %s
+                    """,
+                    (matched_rules_json, confidence, intensity, dedup_key),
+                )
+
     def fetch_unsummarized(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return relevant processed signals that have no summary yet."""
         with self._conn() as conn:

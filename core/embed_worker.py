@@ -67,6 +67,28 @@ class EmbedWorker:
                 "remaining": unprocessed,
             }
 
+        # Second pass: rule-match for LLM-relevant signals that have empty matched_rules
+        proc_cfg = self._config.get("processor", {})
+        rule_match_limit = int(proc_cfg.get("llm_relevant_rule_match_per_tick", 50))
+        pending_dedup_keys = self._storage.fetch_llm_relevant_pending_rule_match(limit=rule_match_limit)
+        rule_matched = 0
+        for dedup_key in pending_dedup_keys:
+            raw = self._storage.fetch_raw_signal_by_dedup_key(dedup_key)
+            if not raw:
+                continue
+            ps = processor.classify_single(raw)
+            self._storage.update_processed_signal_rule_match(
+                dedup_key, ps.matched_rules, ps.confidence, ps.intensity
+            )
+            rule_matched += 1
+        if rule_matched:
+            log.info("[embed_worker] LLM-relevant rule match: %d signals", rule_matched)
+
         remaining = self._storage.count_unprocessed()
         log.info("[embed_worker] done: classified=%d remaining=%d", total, remaining)
-        return {"status": "done", "total": total, "remaining": remaining}
+        return {
+            "status": "done",
+            "total": total,
+            "remaining": remaining,
+            "llm_relevant_rule_matched": rule_matched,
+        }
