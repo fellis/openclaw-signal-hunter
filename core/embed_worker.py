@@ -85,7 +85,7 @@ class EmbedWorker:
 
         # Third pass: backfill matched_rules for any relevant signals with empty matched_rules
         # (e.g. old auto-accept rows). One batch per tick to avoid timeouts; worker drains over time.
-        backfill_per_tick = int(proc_cfg.get("backfill_rule_match_per_tick", 64))
+        backfill_per_tick = int(proc_cfg.get("backfill_rule_match_per_tick", 256))
         backfill_done = 0
         if backfill_per_tick > 0:
             backfill_done = processor.run_backfill_rule_match_batch(backfill_per_tick)
